@@ -43,7 +43,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("list").executes(c -> {
-                Chat.msg(route.size() + " waypoints, particle=" + MushroomTracker.markerParticle
+                Chat.msg(route.size() + " waypoints, particle=" + MushroomTracker.markers
                         + ", broken=" + controller.broken);
                 return 1;
             }));
@@ -74,15 +74,37 @@ public class GlowingMushroomMod implements ClientModInitializer {
             }));
             root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("particle")
                     .executes(c -> {
-                        Chat.msg("Current: " + MushroomTracker.markerParticle);
+                        Chat.msg("Current: " + MushroomTracker.markers + " (/gm particle potion to reset)");
                         return 1;
                     })
-                    .then(argument("id", StringArgumentType.greedyString()).executes(c -> {
-                        String id = StringArgumentType.getString(c, "id").trim();
-                        MushroomTracker.markerParticle = id.contains(":") ? id : "minecraft:" + id;
-                        Chat.msg("Marker particle set to " + MushroomTracker.markerParticle);
+                    .then(argument("ids", StringArgumentType.greedyString()).executes(c -> {
+                        String in = StringArgumentType.getString(c, "ids").trim();
+                        if (in.equalsIgnoreCase("potion")) {
+                            MushroomTracker.markers = MushroomTracker.POTION_PARTICLES;
+                        } else {
+                            var set = new java.util.HashSet<String>();
+                            for (String id : in.split("[\\s,]+")) set.add(id.contains(":") ? id : "minecraft:" + id);
+                            MushroomTracker.markers = set;
+                        }
+                        Chat.msg("Marker particles: " + MushroomTracker.markers);
                         return 1;
                     })));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("tool")
+                    .then(argument("regex", StringArgumentType.greedyString()).executes(c -> {
+                        controller.toolRegex = StringArgumentType.getString(c, "regex");
+                        Chat.msg("Tool regex: " + controller.toolRegex);
+                        return 1;
+                    })));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("sword")
+                    .then(argument("regex", StringArgumentType.greedyString()).executes(c -> {
+                        controller.swordRegex = StringArgumentType.getString(c, "regex");
+                        Chat.msg("Sword regex: " + controller.swordRegex);
+                        return 1;
+                    })));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("speed").executes(c -> {
+                Chat.msg("Tab list speed: " + MacroController.readTabSpeed(mc));
+                return 1;
+            }));
             dispatcher.register(root);
         });
     }

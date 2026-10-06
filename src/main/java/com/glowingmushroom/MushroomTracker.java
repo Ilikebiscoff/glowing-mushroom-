@@ -11,6 +11,7 @@ import net.minecraft.world.level.block.Blocks;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -20,8 +21,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * mushroom blocks sitting next to the configured marker particle.
  */
 public class MushroomTracker {
-    /** Registry id of the particle Hypixel puts on glowing mushrooms. Change with /gm particle. */
-    public static volatile String markerParticle = "minecraft:happy_villager";
+    /** Potion-style particles (how 1.8 SPELL_* particles arrive after protocol translation). */
+    public static final Set<String> POTION_PARTICLES = Set.of("minecraft:entity_effect",
+            "minecraft:ambient_entity_effect", "minecraft:effect", "minecraft:instant_effect");
+    /** Registry ids treated as the mushroom marker. Change with /gm particle. */
+    public static volatile Set<String> markers = POTION_PARTICLES;
     /** While true every particle id is counted so the right marker can be found (/gm scan). */
     public static volatile boolean scanning = false;
 
@@ -45,7 +49,7 @@ public class MushroomTracker {
             var id = BuiltInRegistries.PARTICLE_TYPE.getKey(p.getParticle().getType());
             String name = String.valueOf(id);
             if (scanning) SEEN.merge(name, 1, Integer::sum);
-            if (!name.equals(markerParticle)) continue;
+            if (!markers.contains(name)) continue;
             BlockPos hit = findMushroom(level, p.getX(), p.getY(), p.getZ());
             if (hit != null) MUSHROOMS.put(hit, System.currentTimeMillis());
         }

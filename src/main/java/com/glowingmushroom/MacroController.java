@@ -1,10 +1,12 @@
 package com.glowingmushroom;
 
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.client.KeyMapping;
 import net.minecraft.core.BlockPos;
-import net.minecraft.util.Mth;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -13,24 +15,44 @@ import net.minecraft.world.phys.Vec3;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-/** Walks the route in a loop and breaks any tracked mushroom that is in reach. */
+/**
+ * Walks the route in a loop, breaks tracked mushrooms with the Mooby shears and, every ~25 s,
+ * reads the tab list and uses the Rogue Sword's speed ability when speed is below 400.
+ */
 public class MacroController {
     private static final double REACH = 4.4;
     private static final double ARRIVE_DIST = 0.7;
     private static final long MINE_TIMEOUT_MS = 3500;
     private static final long BLACKLIST_MS = 15000;
+    private static final int SPEED_TARGET = 400;
+    private static final long SPEED_CHECK_MS = 25_000;
+    private static final Pattern SPEED = Pattern.compile("Speed:\\s*\\D*?(\\d+)");
+
+    public volatile String toolRegex = "(?i)moo?by.*shears";
+    public volatile String swordRegex = "(?i)rogue sword";
+
+    private enum Phase { NONE, TO_SWORD, USED, TO_TOOL }
 
     private final Route route;
+    private final HumanAim aim = new HumanAim();
     private final Random rand = new Random();
     private final Map<BlockPos, Long> blacklist = new HashMap<>();
 
     private boolean running;
     private int waypoint;
     private BlockPos target;
+    private Vec3 targetPoint;
     private long targetSince;
     private int stuckTicks;
     private Vec3 lastPos;
+
+    private Phase phase = Phase.NONE;
+    private int wait;
+    private long nextSpeedCheck;
+    private boolean warnedNoSpeed;
 
     public int broken;
 
@@ -44,6 +66,10 @@ public class MacroController {
 
     public void start(Minecraft mc) {
         if (route.size() == 0 || mc.player == null) return;
+        if (findSlot(mc.player, toolRegex) < 0) {
+            Chat.msg("No hotbar item matching " + toolRegex + " (Mooby shears). Not started.");
+            return;
+        }
         double best = Double.MAX_VALUE;
         for (int i = 0; i < route.size(); i++) {
             double d = route.get(i).distanceToSqr(mc.player.position());
@@ -54,6 +80,9 @@ public class MacroController {
         }
         target = null;
         stuckTicks = 0;
+        phase = Phase.NONE;
+        aim.reset();
+        nextSpeedCheck = System.currentTimeMillis() + 2000; // check shortly after start
         running = true;
     }
 
@@ -69,9 +98,17 @@ public class MacroController {
             releaseKeys(mc);
             return;
         }
-
         long now = System.currentTimeMillis();
         blacklist.values().removeIf(t -> now - t > BLACKLIST_MS);
+
+        if (handleSpeedBoost(mc, p, now)) {
+            mc.options.keyAttack.setDown(false);
+            walk(mc, p);
+            return;
+        }
+        if (!ensureTool(p)) {
+            return;
+        }
 
         if (target != null) {
             if (!MushroomTracker.isMushroom(mc.level.getBlockState(target).getBlock())) {
@@ -85,6 +122,12 @@ public class MacroController {
         if (target == null) {
             target = pickTarget(mc, p);
             targetSince = now;
+            if (target != null) {
+                // aim somewhere inside the block, not the exact middle
+                targetPoint = target.getCenter().add((rand.nextDouble() - 0.5) * 0.4,
+                        (rand.nextDouble() - 0.5) * 0.4, (rand.nextDouble() - 0.5) * 0.4);
+                aim.reset();
+            }
         }
 
         if (target != null) {
@@ -95,7 +138,83 @@ public class MacroController {
         }
     }
 
-    /** Nearest tracked mushroom within reach that we can see. */
+    // ---- tool / speed handling ------------------------------------------------------------
+
+    /** Returns true while the sword sequence is in progress (mining is paused). */
+    private boolean handleSpeedBoost(Minecraft mc, LocalPlayer p, long now) {
+        if (phase == Phase.NONE) {
+            if (now < nextSpeedCheck || target != null) return false;
+            nextSpeedCheck = now + SPEED_CHECK_MS + rand.nextInt(1500);
+            int speed = readTabSpeed(mc);
+            if (speed < 0) {
+                if (!warnedNoSpeed) {
+                    Chat.msg("Can't find \"Speed:\" in the tab list; speed check skipped.");
+                    warnedNoSpeed = true;
+                }
+                return false;
+            }
+            if (speed >= SPEED_TARGET) return false;
+            int slot = findSlot(p, swordRegex);
+            if (slot < 0) {
+                Chat.msg("Speed is " + speed + " but no Rogue Sword in hotbar.");
+                return false;
+            }
+            p.getInventory().setSelectedSlot(slot);
+            wait = 3 + rand.nextInt(4);
+            phase = Phase.TO_SWORD;
+            return true;
+        }
+        if (wait-- > 0) return true;
+        switch (phase) {
+            case TO_SWORD -> {
+                mc.gameMode.useItem(p, InteractionHand.MAIN_HAND);
+                p.swing(InteractionHand.MAIN_HAND);
+                wait = 4 + rand.nextInt(5);
+                phase = Phase.USED;
+            }
+            case USED -> {
+                int tool = findSlot(p, toolRegex);
+                if (tool >= 0) p.getInventory().setSelectedSlot(tool);
+                wait = 2 + rand.nextInt(3);
+                phase = Phase.TO_TOOL;
+            }
+            default -> phase = Phase.NONE;
+        }
+        return phase != Phase.NONE;
+    }
+
+    /** Makes sure the Mooby shears are in hand. Returns false if they can't be found. */
+    private boolean ensureTool(LocalPlayer p) {
+        int slot = findSlot(p, toolRegex);
+        if (slot < 0) return false;
+        if (p.getInventory().getSelectedSlot() != slot) p.getInventory().setSelectedSlot(slot);
+        return true;
+    }
+
+    private static int findSlot(LocalPlayer p, String regex) {
+        Pattern pat = Pattern.compile(regex);
+        for (int i = 0; i < 9; i++) {
+            ItemStack st = p.getInventory().getItem(i);
+            if (!st.isEmpty() && pat.matcher(st.getHoverName().getString()).find()) return i;
+        }
+        return -1;
+    }
+
+    /** Reads the "Speed: ✦400" widget from the tab list; -1 if it isn't there. */
+    public static int readTabSpeed(Minecraft mc) {
+        var conn = mc.getConnection();
+        if (conn == null) return -1;
+        for (var info : conn.getOnlinePlayers()) {
+            Component name = info.getTabListDisplayName();
+            if (name == null) continue;
+            Matcher m = SPEED.matcher(name.getString());
+            if (m.find()) return Integer.parseInt(m.group(1));
+        }
+        return -1;
+    }
+
+    // ---- mining / walking -------------------------------------------------------------------
+
     private BlockPos pickTarget(Minecraft mc, LocalPlayer p) {
         Vec3 eyes = p.getEyePosition();
         BlockPos best = null;
@@ -116,8 +235,10 @@ public class MacroController {
 
     private void mine(Minecraft mc, LocalPlayer p) {
         mc.options.keyUp.setDown(false);
+        mc.options.keySprint.setDown(false);
         mc.options.keyJump.setDown(false);
-        boolean aimed = aimAt(p, target.getCenter(), 14f);
+        float[] ang = anglesTo(p, targetPoint);
+        boolean aimed = aim.update(mc, p, ang[0], ang[1], 2.5f);
         boolean onTarget = aimed && mc.hitResult instanceof BlockHitResult bhr
                 && bhr.getType() == HitResult.Type.BLOCK && bhr.getBlockPos().equals(target);
         mc.options.keyAttack.setDown(onTarget);
@@ -134,7 +255,9 @@ public class MacroController {
             waypoint = (waypoint + 1) % route.size();
             return;
         }
-        aimAt(p, new Vec3(wp.x, p.getEyeY(), wp.z), 9f);
+        float[] ang = anglesTo(p, new Vec3(wp.x, p.getEyeY(), wp.z));
+        // people look a little downward while walking rather than dead level
+        aim.update(mc, p, ang[0], 6f, 3.5f);
         mc.options.keyUp.setDown(true);
         mc.options.keySprint.setDown(true);
         mc.options.keyJump.setDown(p.horizontalCollision && p.onGround());
@@ -149,19 +272,12 @@ public class MacroController {
         }
     }
 
-    /** Rotates smoothly toward a point. Returns true once the crosshair is (almost) there. */
-    private boolean aimAt(LocalPlayer p, Vec3 to, float maxStep) {
+    private static float[] anglesTo(LocalPlayer p, Vec3 to) {
         Vec3 eyes = p.getEyePosition();
         double dx = to.x - eyes.x, dy = to.y - eyes.y, dz = to.z - eyes.z;
-        float wantYaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90f;
-        float wantPitch = (float) -(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * 180.0 / Math.PI);
-
-        float dYaw = Mth.wrapDegrees(wantYaw - p.getYRot());
-        float dPitch = wantPitch - p.getXRot();
-        float step = maxStep * (0.7f + rand.nextFloat() * 0.3f);
-        p.setYRot(p.getYRot() + Mth.clamp(dYaw * 0.45f, -step, step));
-        p.setXRot(Mth.clamp(p.getXRot() + Mth.clamp(dPitch * 0.45f, -step, step), -90f, 90f));
-        return Math.abs(dYaw) < 4f && Math.abs(dPitch) < 4f;
+        float yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90f;
+        float pitch = (float) -(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * 180.0 / Math.PI);
+        return new float[]{yaw, pitch};
     }
 
     private void releaseKeys(Minecraft mc) {
