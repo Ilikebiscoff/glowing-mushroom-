@@ -1,0 +1,36 @@
+name: Build mod jar
+
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.4.0
+      - name: Build
+        run: gradle build --no-daemon
+      - name: Upload jar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glowing-mushroom-auto
+          path: build/libs/glowing-mushroom-auto-*[0-9].jar
+      - name: Publish release with the jar
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: Latest build
+          prerelease: true
+          files: build/libs/glowing-mushroom-auto-*[0-9].jar
