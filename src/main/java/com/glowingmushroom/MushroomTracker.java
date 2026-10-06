@@ -1,99 +1,80 @@
 package com.glowingmushroom;
 
-import io.netty.channel.ChannelDuplexHandler;
-import io.netty.channel.ChannelHandlerContext;
-import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
-import net.minecraft.init.Blocks;
-import net.minecraft.network.play.server.S2APacketParticles;
-import net.minecraft.util.BlockPos;
-import net.minecraft.util.EnumParticleTypes;
-import net.minecraft.world.World;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.common.gameevent.TickEvent;
-import net.minecraftforge.fml.common.network.FMLNetworkEvent;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 
-import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Listens to S2APacketParticles (like SkyHanni's highlighters do) and remembers the
- * mushroom blocks next to the configured marker particle.
+ * Collects particle packets (the same signal SkyHanni's highlighters use) and remembers the
+ * mushroom blocks sitting next to the configured marker particle.
  */
 public class MushroomTracker {
-    /** Particle that Hypixel spawns on a glowing mushroom. Change live with /gm particle <TYPE>. */
-    public volatile EnumParticleTypes markerParticle = EnumParticleTypes.SPELL_MOB;
-    /** When true, every particle seen is counted so the right marker can be found. */
-    public volatile boolean debug = false;
+    /** Registry id of the particle Hypixel puts on glowing mushrooms. Change with /gm particle. */
+    public static volatile String markerParticle = "minecraft:happy_villager";
+    /** While true every particle id is counted so the right marker can be found (/gm scan). */
+    public static volatile boolean scanning = false;
 
-    private final ConcurrentLinkedQueue<S2APacketParticles> queue = new ConcurrentLinkedQueue<S2APacketParticles>();
-    private final Map<EnumParticleTypes, Integer> seen = new EnumMap<EnumParticleTypes, Integer>(EnumParticleTypes.class);
-    /** Known mushrooms -> last time (ms) a particle confirmed them. */
-    public final Map<BlockPos, Long> mushrooms = new ConcurrentHashMap<BlockPos, Long>();
-
+    private static final ConcurrentLinkedQueue<ClientboundLevelParticlesPacket> QUEUE = new ConcurrentLinkedQueue<>();
+    private static final Map<String, Integer> SEEN = new HashMap<>();
     private static final long EXPIRE_MS = 8000;
 
-    @SubscribeEvent
-    public void onConnect(FMLNetworkEvent.ClientConnectedToServerEvent e) {
-        try {
-            e.manager.channel().pipeline().addBefore("packet_handler", "gm_particles", new ChannelDuplexHandler() {
-                @Override
-                public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                    if (msg instanceof S2APacketParticles) queue.add((S2APacketParticles) msg);
-                    super.channelRead(ctx, msg);
-                }
-            });
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        }
+    /** Known mushrooms -> last time (ms) a particle confirmed them. */
+    public static final Map<BlockPos, Long> MUSHROOMS = new ConcurrentHashMap<>();
+
+    /** Called from the mixin (may be off the main thread). */
+    public static void offer(ClientboundLevelParticlesPacket packet) {
+        QUEUE.add(packet);
     }
 
-    @SubscribeEvent
-    public void onTick(TickEvent.ClientTickEvent e) {
-        if (e.phase != TickEvent.Phase.END) return;
-        Minecraft mc = Minecraft.getMinecraft();
-        World w = mc.theWorld;
-        S2APacketParticles p;
-        while ((p = queue.poll()) != null) {
-            if (w == null) continue;
-            EnumParticleTypes type = p.getParticleType();
-            if (debug) {
-                Integer c = seen.get(type);
-                seen.put(type, c == null ? 1 : c + 1);
-            }
-            if (type != markerParticle) continue;
-            BlockPos hit = findMushroom(w, p.getXCoordinate(), p.getYCoordinate(), p.getZCoordinate());
-            if (hit != null) mushrooms.put(hit, System.currentTimeMillis());
+    public static void tick(Minecraft mc) {
+        ClientLevel level = mc.level;
+        ClientboundLevelParticlesPacket p;
+        while ((p = QUEUE.poll()) != null) {
+            if (level == null) continue;
+            var id = BuiltInRegistries.PARTICLE_TYPE.getKey(p.getParticle().getType());
+            String name = String.valueOf(id);
+            if (scanning) SEEN.merge(name, 1, Integer::sum);
+            if (!name.equals(markerParticle)) continue;
+            BlockPos hit = findMushroom(level, p.getX(), p.getY(), p.getZ());
+            if (hit != null) MUSHROOMS.put(hit, System.currentTimeMillis());
         }
         long now = System.currentTimeMillis();
-        for (Iterator<Map.Entry<BlockPos, Long>> it = mushrooms.entrySet().iterator(); it.hasNext(); ) {
-            Map.Entry<BlockPos, Long> en = it.next();
-            if (now - en.getValue() > EXPIRE_MS || w == null || !isMushroom(w.getBlockState(en.getKey()).getBlock())) {
+        for (Iterator<Map.Entry<BlockPos, Long>> it = MUSHROOMS.entrySet().iterator(); it.hasNext(); ) {
+            var en = it.next();
+            if (level == null || now - en.getValue() > EXPIRE_MS || !isMushroom(level.getBlockState(en.getKey()).getBlock())) {
                 it.remove();
             }
         }
     }
 
-    public Map<EnumParticleTypes, Integer> drainSeen() {
-        Map<EnumParticleTypes, Integer> copy = new EnumMap<EnumParticleTypes, Integer>(seen);
-        seen.clear();
+    public static Map<String, Integer> drainSeen() {
+        Map<String, Integer> copy = new TreeMap<>(SEEN);
+        SEEN.clear();
         return copy;
     }
 
-    /** Looks at the particle's block and its neighbours for a mushroom. */
-    private BlockPos findMushroom(World w, double x, double y, double z) {
-        BlockPos base = new BlockPos(Math.floor(x), Math.floor(y), Math.floor(z));
+    /** Checks the particle's block and its neighbours for a mushroom; returns the closest. */
+    private static BlockPos findMushroom(ClientLevel level, double x, double y, double z) {
+        BlockPos base = BlockPos.containing(x, y, z);
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
         for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
                 for (int dz = -1; dz <= 1; dz++) {
-                    BlockPos bp = base.add(dx, dy, dz);
-                    if (!isMushroom(w.getBlockState(bp).getBlock())) continue;
-                    double d = bp.distanceSqToCenter(x, y, z);
+                    BlockPos bp = base.offset(dx, dy, dz);
+                    if (!isMushroom(level.getBlockState(bp).getBlock())) continue;
+                    double d = bp.distToCenterSqr(x, y, z);
                     if (d < bestDist) {
                         bestDist = d;
                         best = bp;
@@ -103,7 +84,7 @@ public class MushroomTracker {
     }
 
     public static boolean isMushroom(Block b) {
-        return b == Blocks.red_mushroom || b == Blocks.brown_mushroom
-                || b == Blocks.red_mushroom_block || b == Blocks.brown_mushroom_block;
+        return b == Blocks.RED_MUSHROOM || b == Blocks.BROWN_MUSHROOM
+                || b == Blocks.RED_MUSHROOM_BLOCK || b == Blocks.BROWN_MUSHROOM_BLOCK;
     }
 }

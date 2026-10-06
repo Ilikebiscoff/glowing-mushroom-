@@ -1,14 +1,13 @@
 package com.glowingmushroom;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.util.ChatComponentText;
+import net.minecraft.network.chat.Component;
 
 public final class Chat {
     private Chat() {}
 
     public static void msg(String s) {
-        if (Minecraft.getMinecraft().thePlayer != null) {
-            Minecraft.getMinecraft().thePlayer.addChatMessage(new ChatComponentText("§a[GM] §f" + s));
-        }
+        var player = Minecraft.getInstance().player;
+        if (player != null) player.displayClientMessage(Component.literal("§a[GM] §f" + s), false);
     }
 }

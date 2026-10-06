@@ -1,7 +1,0 @@
-[{
-  "modid": "glowingmushroomauto",
-  "name": "Glowing Mushroom Auto",
-  "description": "Follows a recorded route and breaks glowing mushrooms found via their particles.",
-  "version": "${version}",
-  "mcversion": "1.8.9"
-}]

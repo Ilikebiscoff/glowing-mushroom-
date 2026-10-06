@@ -1,96 +1,89 @@
 package com.glowingmushroom;
 
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.entity.RenderManager;
-import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.util.AxisAlignedBB;
-import net.minecraft.util.BlockPos;
-import net.minecraft.util.Vec3;
-import net.minecraft.client.renderer.RenderGlobal;
-import net.minecraftforge.client.ClientCommandHandler;
-import net.minecraftforge.client.event.RenderWorldLastEvent;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.fml.client.registry.ClientRegistry;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.common.event.FMLInitializationEvent;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.common.gameevent.InputEvent;
-import org.lwjgl.input.Keyboard;
-import org.lwjgl.opengl.GL11;
 
-import java.io.File;
+import static com.mojang.brigadier.builder.RequiredArgumentBuilder.argument;
 
-@Mod(modid = "glowingmushroomauto", name = "Glowing Mushroom Auto", version = "1.0.0", clientSideOnly = true)
-public class GlowingMushroomMod {
-    public Route route;
-    public MushroomTracker tracker;
-    public MacroController controller;
-    private KeyBinding toggleKey;
+public class GlowingMushroomMod implements ClientModInitializer {
+    private Route route;
+    private MacroController controller;
 
-    @Mod.EventHandler
-    public void init(FMLInitializationEvent e) {
-        route = new Route(new File(Minecraft.getMinecraft().mcDataDir, "config/glowingmushroom_route.json"));
-        tracker = new MushroomTracker();
-        controller = new MacroController(route, tracker);
+    @Override
+    public void onInitializeClient() {
+        route = new Route(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_route.json"));
+        controller = new MacroController(route);
 
-        toggleKey = new KeyBinding("Toggle Glowing Mushroom Auto", Keyboard.KEY_J, "Glowing Mushroom Auto");
-        ClientRegistry.registerKeyBinding(toggleKey);
+        ClientTickEvents.START_CLIENT_TICK.register(mc -> {
+            MushroomTracker.tick(mc);
+            controller.tick(mc);
+        });
 
-        MinecraftForge.EVENT_BUS.register(this);
-        MinecraftForge.EVENT_BUS.register(tracker);
-        MinecraftForge.EVENT_BUS.register(controller);
-        net.minecraftforge.fml.common.FMLCommonHandler.instance().bus().register(this);
-        net.minecraftforge.fml.common.FMLCommonHandler.instance().bus().register(tracker);
-        net.minecraftforge.fml.common.FMLCommonHandler.instance().bus().register(controller);
-        ClientCommandHandler.instance.registerCommand(new GmCommand(this));
-    }
-
-    @SubscribeEvent
-    public void onKey(InputEvent.KeyInputEvent e) {
-        if (!toggleKey.isPressed()) return;
-        if (controller.isRunning()) {
-            controller.stop();
-            Chat.msg("Stopped.");
-        } else if (route.size() > 0) {
-            controller.start();
-            Chat.msg("Started.");
-        } else {
-            Chat.msg("Record a route first with /gm add.");
-        }
-    }
-
-    /** Draws boxes around tracked mushrooms and the route, like SkyHanni's highlighters. */
-    @SubscribeEvent
-    public void onRender(RenderWorldLastEvent e) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc.thePlayer == null) return;
-        RenderManager rm = mc.getRenderManager();
-        double vx = rm.viewerPosX, vy = rm.viewerPosY, vz = rm.viewerPosZ;
-
-        GlStateManager.pushMatrix();
-        GlStateManager.disableTexture2D();
-        GlStateManager.disableDepth();
-        GlStateManager.disableLighting();
-        GlStateManager.enableBlend();
-        GL11.glLineWidth(2f);
-
-        for (BlockPos bp : tracker.mushrooms.keySet()) {
-            boolean cur = bp.equals(controller.currentTarget());
-            AxisAlignedBB bb = new AxisAlignedBB(bp, bp.add(1, 1, 1)).offset(-vx, -vy, -vz);
-            RenderGlobal.drawOutlinedBoundingBox(bb, cur ? 255 : 50, cur ? 50 : 255, 50, 255);
-        }
-        for (int i = 0; i < route.size(); i++) {
-            Vec3 v = route.get(i);
-            AxisAlignedBB bb = new AxisAlignedBB(v.xCoord - 0.2, v.yCoord, v.zCoord - 0.2,
-                    v.xCoord + 0.2, v.yCoord + 0.4, v.zCoord + 0.2).offset(-vx, -vy, -vz);
-            boolean next = controller.isRunning() && i == controller.waypointIndex();
-            RenderGlobal.drawOutlinedBoundingBox(bb, 80, 150, 255, next ? 255 : 120);
-        }
-
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableDepth();
-        GlStateManager.disableBlend();
-        GlStateManager.popMatrix();
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
+            Minecraft mc = Minecraft.getInstance();
+            var root = LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("gm");
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("add").executes(c -> {
+                var p = mc.player;
+                route.add(p.getX(), p.getY(), p.getZ());
+                Chat.msg("Added waypoint #" + route.size());
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("undo").executes(c -> {
+                Chat.msg(route.removeLast() ? "Removed last waypoint." : "Route is empty.");
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("clear").executes(c -> {
+                route.clear();
+                Chat.msg("Route cleared.");
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("list").executes(c -> {
+                Chat.msg(route.size() + " waypoints, particle=" + MushroomTracker.markerParticle
+                        + ", broken=" + controller.broken);
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("start").executes(c -> {
+                if (route.size() == 0) Chat.msg("Record a route first with /gm add.");
+                else {
+                    controller.start(mc);
+                    Chat.msg("Started.");
+                }
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("stop").executes(c -> {
+                controller.stop(mc);
+                Chat.msg("Stopped.");
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("scan").executes(c -> {
+                if (!MushroomTracker.scanning) {
+                    MushroomTracker.scanning = true;
+                    MushroomTracker.drainSeen();
+                    Chat.msg("Counting particles. Stand near glowing mushrooms, then run /gm scan again.");
+                } else {
+                    MushroomTracker.scanning = false;
+                    MushroomTracker.drainSeen().forEach((k, v) -> Chat.msg(k + ": " + v));
+                    Chat.msg("Pick the one that only shows on mushrooms: /gm particle <id>");
+                }
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("particle")
+                    .executes(c -> {
+                        Chat.msg("Current: " + MushroomTracker.markerParticle);
+                        return 1;
+                    })
+                    .then(argument("id", StringArgumentType.greedyString()).executes(c -> {
+                        String id = StringArgumentType.getString(c, "id").trim();
+                        MushroomTracker.markerParticle = id.contains(":") ? id : "minecraft:" + id;
+                        Chat.msg("Marker particle set to " + MushroomTracker.markerParticle);
+                        return 1;
+                    })));
+            dispatcher.register(root);
+        });
     }
 }

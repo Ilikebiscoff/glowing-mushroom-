@@ -1,32 +1,31 @@
-buildscript {
-    repositories {
-        jcenter()
-        maven { name = "forge"; url = "https://maven.minecraftforge.net/" }
-    }
-    dependencies {
-        classpath 'net.minecraftforge.gradle:ForgeGradle:2.1-SNAPSHOT'
-    }
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
 }
-apply plugin: 'net.minecraftforge.gradle.forge'
 
-version = "1.0.0"
-group = "com.glowingmushroom"
-archivesBaseName = "GlowingMushroomAuto"
-sourceCompatibility = targetCompatibility = 1.8
+version = project.mod_version
+group = 'com.glowingmushroom'
+base.archivesName = project.archives_base_name
 
-minecraft {
-    version = "1.8.9-11.15.1.2318-1.8.9"
-    runDir = "run"
-    mappings = "stable_22"
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    // 26.1 is unobfuscated: no mappings line and plain implementation (no "mod" prefix).
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
 
 processResources {
     inputs.property "version", project.version
-    from(sourceSets.main.resources.srcDirs) {
-        include 'mcmod.info'
-        expand 'version': project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
     }
-    from(sourceSets.main.resources.srcDirs) {
-        exclude 'mcmod.info'
-    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+}
+
+java {
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
 }

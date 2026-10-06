@@ -3,13 +3,14 @@ package com.glowingmushroom;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
-import net.minecraft.util.Vec3;
+import net.minecraft.world.phys.Vec3;
 
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
 import java.lang.reflect.Type;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,12 +19,19 @@ public class Route {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Type TYPE = new TypeToken<List<double[]>>() {}.getType();
 
-    private final List<double[]> points = new ArrayList<double[]>();
-    private final File file;
+    private final List<double[]> points = new ArrayList<>();
+    private final Path file;
 
-    public Route(File file) {
+    public Route(Path file) {
         this.file = file;
-        load();
+        if (Files.exists(file)) {
+            try (Reader r = Files.newBufferedReader(file)) {
+                List<double[]> loaded = GSON.fromJson(r, TYPE);
+                if (loaded != null) points.addAll(loaded);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     public void add(double x, double y, double z) {
@@ -38,7 +46,7 @@ public class Route {
 
     public boolean removeLast() {
         if (points.isEmpty()) return false;
-        points.remove(points.size() - 1);
+        points.removeLast();
         save();
         return true;
     }
@@ -52,19 +60,12 @@ public class Route {
         return new Vec3(p[0], p[1], p[2]);
     }
 
-    private void load() {
-        if (!file.exists()) return;
-        try (FileReader r = new FileReader(file)) {
-            List<double[]> loaded = GSON.fromJson(r, TYPE);
-            if (loaded != null) points.addAll(loaded);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
     private void save() {
-        try (FileWriter w = new FileWriter(file)) {
-            GSON.toJson(points, TYPE, w);
+        try {
+            Files.createDirectories(file.getParent());
+            try (Writer w = Files.newBufferedWriter(file)) {
+                GSON.toJson(points, TYPE, w);
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }

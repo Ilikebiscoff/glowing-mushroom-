@@ -1,14 +1,14 @@
 package com.glowingmushroom;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.entity.EntityPlayerSP;
-import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.util.BlockPos;
-import net.minecraft.util.MathHelper;
-import net.minecraft.util.MovingObjectPosition;
-import net.minecraft.util.Vec3;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.common.gameevent.TickEvent;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -21,67 +21,60 @@ public class MacroController {
     private static final long MINE_TIMEOUT_MS = 3500;
     private static final long BLACKLIST_MS = 15000;
 
-    private final Minecraft mc = Minecraft.getMinecraft();
     private final Route route;
-    private final MushroomTracker tracker;
     private final Random rand = new Random();
+    private final Map<BlockPos, Long> blacklist = new HashMap<>();
 
     private boolean running;
     private int waypoint;
     private BlockPos target;
     private long targetSince;
-    private final Map<BlockPos, Long> blacklist = new HashMap<BlockPos, Long>();
     private int stuckTicks;
     private Vec3 lastPos;
 
     public int broken;
 
-    public MacroController(Route route, MushroomTracker tracker) {
+    public MacroController(Route route) {
         this.route = route;
-        this.tracker = tracker;
     }
 
     public boolean isRunning() {
         return running;
     }
 
-    public void start() {
-        if (route.size() == 0) return;
-        EntityPlayerSP p = mc.thePlayer;
-        // Begin at the nearest waypoint
+    public void start(Minecraft mc) {
+        if (route.size() == 0 || mc.player == null) return;
         double best = Double.MAX_VALUE;
         for (int i = 0; i < route.size(); i++) {
-            double d = route.get(i).squareDistanceTo(p.getPositionVector());
+            double d = route.get(i).distanceToSqr(mc.player.position());
             if (d < best) {
                 best = d;
                 waypoint = i;
             }
         }
         target = null;
+        stuckTicks = 0;
         running = true;
     }
 
-    public void stop() {
+    public void stop(Minecraft mc) {
         running = false;
-        releaseKeys();
+        releaseKeys(mc);
     }
 
-    @SubscribeEvent
-    public void onTick(TickEvent.ClientTickEvent e) {
-        if (e.phase != TickEvent.Phase.START || !running) return;
-        EntityPlayerSP p = mc.thePlayer;
-        if (p == null || mc.theWorld == null || mc.currentScreen != null) {
-            releaseKeys();
+    public void tick(Minecraft mc) {
+        if (!running) return;
+        LocalPlayer p = mc.player;
+        if (p == null || mc.level == null || mc.screen != null) {
+            releaseKeys(mc);
             return;
         }
 
         long now = System.currentTimeMillis();
         blacklist.values().removeIf(t -> now - t > BLACKLIST_MS);
 
-        // Drop the current target if it was mined, expired or took too long
         if (target != null) {
-            boolean gone = !MushroomTracker.isMushroom(mc.theWorld.getBlockState(target).getBlock());
-            if (gone) {
+            if (!MushroomTracker.isMushroom(mc.level.getBlockState(target).getBlock())) {
                 broken++;
                 target = null;
             } else if (now - targetSince > MINE_TIMEOUT_MS) {
@@ -90,117 +83,95 @@ public class MacroController {
             }
         }
         if (target == null) {
-            target = pickTarget(p);
+            target = pickTarget(mc, p);
             targetSince = now;
         }
 
         if (target != null) {
-            mine(p);
+            mine(mc, p);
         } else {
-            setKey(mc.gameSettings.keyBindAttack, false);
-            walk(p);
+            mc.options.keyAttack.setDown(false);
+            walk(mc, p);
         }
     }
 
-    /** Nearest tracked mushroom within reach that we have line of sight to. */
-    private BlockPos pickTarget(EntityPlayerSP p) {
-        Vec3 eyes = p.getPositionEyes(1f);
+    /** Nearest tracked mushroom within reach that we can see. */
+    private BlockPos pickTarget(Minecraft mc, LocalPlayer p) {
+        Vec3 eyes = p.getEyePosition();
         BlockPos best = null;
         double bestD = REACH * REACH;
-        for (BlockPos bp : tracker.mushrooms.keySet()) {
+        for (BlockPos bp : MushroomTracker.MUSHROOMS.keySet()) {
             if (blacklist.containsKey(bp)) continue;
-            Vec3 c = new Vec3(bp.getX() + 0.5, bp.getY() + 0.5, bp.getZ() + 0.5);
-            double d = eyes.squareDistanceTo(c);
+            Vec3 c = bp.getCenter();
+            double d = eyes.distanceToSqr(c);
             if (d > bestD) continue;
-            MovingObjectPosition mop = mc.theWorld.rayTraceBlocks(eyes, c, false, true, false);
-            if (mop != null && !mop.getBlockPos().equals(bp)) continue;
+            BlockHitResult hit = mc.level.clip(new ClipContext(eyes, c,
+                    ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, p));
+            if (hit.getType() == HitResult.Type.BLOCK && !hit.getBlockPos().equals(bp)) continue;
             bestD = d;
             best = bp;
         }
         return best;
     }
 
-    private void mine(EntityPlayerSP p) {
-        setKey(mc.gameSettings.keyBindForward, false);
-        setKey(mc.gameSettings.keyBindJump, false);
-        Vec3 c = new Vec3(target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5);
-        boolean aimed = aimAt(p, c, 14f);
-        MovingObjectPosition over = mc.objectMouseOver;
-        boolean onTarget = aimed && over != null
-                && over.typeOfHit == MovingObjectPosition.MovingObjectType.BLOCK
-                && over.getBlockPos().equals(target);
-        if (onTarget && !mc.gameSettings.keyBindAttack.isKeyDown()) {
-            KeyBinding.onTick(mc.gameSettings.keyBindAttack.getKeyCode());
-        }
-        setKey(mc.gameSettings.keyBindAttack, onTarget);
+    private void mine(Minecraft mc, LocalPlayer p) {
+        mc.options.keyUp.setDown(false);
+        mc.options.keyJump.setDown(false);
+        boolean aimed = aimAt(p, target.getCenter(), 14f);
+        boolean onTarget = aimed && mc.hitResult instanceof BlockHitResult bhr
+                && bhr.getType() == HitResult.Type.BLOCK && bhr.getBlockPos().equals(target);
+        mc.options.keyAttack.setDown(onTarget);
     }
 
-    private void walk(EntityPlayerSP p) {
+    private void walk(Minecraft mc, LocalPlayer p) {
         if (route.size() == 0) {
-            stop();
+            stop(mc);
             return;
         }
         Vec3 wp = route.get(waypoint);
-        double dx = wp.xCoord - p.posX, dz = wp.zCoord - p.posZ;
-        double dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist < ARRIVE_DIST && Math.abs(wp.yCoord - p.posY) < 2.5) {
+        double dx = wp.x - p.getX(), dz = wp.z - p.getZ();
+        if (Math.sqrt(dx * dx + dz * dz) < ARRIVE_DIST && Math.abs(wp.y - p.getY()) < 2.5) {
             waypoint = (waypoint + 1) % route.size();
             return;
         }
-        // Look at the waypoint horizontally, keeping the head level
-        Vec3 look = new Vec3(wp.xCoord, p.posY + p.getEyeHeight(), wp.zCoord);
-        aimAt(p, look, 9f);
-        setKey(mc.gameSettings.keyBindForward, true);
-        setKey(mc.gameSettings.keyBindSprint, true);
+        aimAt(p, new Vec3(wp.x, p.getEyeY(), wp.z), 9f);
+        mc.options.keyUp.setDown(true);
+        mc.options.keySprint.setDown(true);
+        mc.options.keyJump.setDown(p.horizontalCollision && p.onGround());
 
-        // Jump over steps; detect being stuck
-        boolean jump = p.isCollidedHorizontally && p.onGround;
-        setKey(mc.gameSettings.keyBindJump, jump);
-        Vec3 pos = p.getPositionVector();
-        if (lastPos != null && pos.squareDistanceTo(lastPos) < 0.0004) stuckTicks++;
+        Vec3 pos = p.position();
+        if (lastPos != null && pos.distanceToSqr(lastPos) < 0.0004) stuckTicks++;
         else stuckTicks = 0;
         lastPos = pos;
         if (stuckTicks > 60) {
             Chat.msg("Stuck at waypoint " + (waypoint + 1) + " - macro stopped.");
-            stop();
+            stop(mc);
         }
     }
 
     /** Rotates smoothly toward a point. Returns true once the crosshair is (almost) there. */
-    private boolean aimAt(EntityPlayerSP p, Vec3 to, float maxStep) {
-        Vec3 eyes = p.getPositionEyes(1f);
-        double dx = to.xCoord - eyes.xCoord, dy = to.yCoord - eyes.yCoord, dz = to.zCoord - eyes.zCoord;
+    private boolean aimAt(LocalPlayer p, Vec3 to, float maxStep) {
+        Vec3 eyes = p.getEyePosition();
+        double dx = to.x - eyes.x, dy = to.y - eyes.y, dz = to.z - eyes.z;
         float wantYaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90f;
         float wantPitch = (float) -(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * 180.0 / Math.PI);
 
-        float dYaw = MathHelper.wrapAngleTo180_float(wantYaw - p.rotationYaw);
-        float dPitch = wantPitch - p.rotationPitch;
+        float dYaw = Mth.wrapDegrees(wantYaw - p.getYRot());
+        float dPitch = wantPitch - p.getXRot();
         float step = maxStep * (0.7f + rand.nextFloat() * 0.3f);
-        p.rotationYaw += clamp(dYaw * 0.45f, -step, step);
-        p.rotationPitch = MathHelper.clamp_float(p.rotationPitch + clamp(dPitch * 0.45f, -step, step), -90f, 90f);
+        p.setYRot(p.getYRot() + Mth.clamp(dYaw * 0.45f, -step, step));
+        p.setXRot(Mth.clamp(p.getXRot() + Mth.clamp(dPitch * 0.45f, -step, step), -90f, 90f));
         return Math.abs(dYaw) < 4f && Math.abs(dPitch) < 4f;
     }
 
-    private static float clamp(float v, float lo, float hi) {
-        return Math.max(lo, Math.min(hi, v));
-    }
-
-    private void setKey(KeyBinding k, boolean down) {
-        KeyBinding.setKeyBindState(k.getKeyCode(), down);
-    }
-
-    private void releaseKeys() {
-        setKey(mc.gameSettings.keyBindForward, false);
-        setKey(mc.gameSettings.keyBindSprint, false);
-        setKey(mc.gameSettings.keyBindJump, false);
-        setKey(mc.gameSettings.keyBindAttack, false);
+    private void releaseKeys(Minecraft mc) {
+        for (KeyMapping k : new KeyMapping[]{mc.options.keyUp, mc.options.keySprint,
+                mc.options.keyJump, mc.options.keyAttack}) {
+            k.setDown(false);
+        }
     }
 
     public int waypointIndex() {
         return waypoint;
-    }
-
-    public BlockPos currentTarget() {
-        return target;
     }
 }

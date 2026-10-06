@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "glowingmushroomauto",
+  "version": "${version}",
+  "name": "Glowing Mushroom Auto",
+  "description": "Follows a recorded route and breaks glowing mushrooms found via their particles.",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.glowingmushroom.GlowingMushroomMod"]
+  },
+  "mixins": [
+    { "config": "glowingmushroomauto.mixins.json", "environment": "client" }
+  ],
+  "depends": {
+    "fabricloader": ">=0.18.0",
+    "minecraft": "26.1.*",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
