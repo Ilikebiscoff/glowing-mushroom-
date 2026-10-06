@@ -23,3 +23,4 @@ Marker particles default to the potion set (`entity_effect`, `ambient_entity_eff
    set the one that only appears on mushrooms with `/gm particle <id>` (default is the potion set; `/gm particle potion` restores it).
 2. Walk your loop and `/gm add` at each corner (`/gm undo`, `/gm clear`). Saved to `config/glowingmushroom_route.json`.
 3. `/gm start` / `/gm stop`. It loops the route, stops to mine tracked mushrooms within 4.4 blocks, and stops itself if stuck.
+FAH
