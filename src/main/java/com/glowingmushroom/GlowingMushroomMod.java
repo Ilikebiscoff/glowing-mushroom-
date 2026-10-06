@@ -8,7 +8,9 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 
-import static com.mojang.brigadier.builder.RequiredArgumentBuilder.argument;
+import com.mojang.brigadier.arguments.ArgumentType;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
 public class GlowingMushroomMod implements ClientModInitializer {
     private Route route;
@@ -26,28 +28,28 @@ public class GlowingMushroomMod implements ClientModInitializer {
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             Minecraft mc = Minecraft.getInstance();
-            var root = LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("gm");
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("add").executes(c -> {
+            var root = LiteralArgumentBuilder.<FabricClientCommandSource>literal("gm");
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("add").executes(c -> {
                 var p = mc.player;
                 route.add(p.getX(), p.getY(), p.getZ());
                 Chat.msg("Added waypoint #" + route.size());
                 return 1;
             }));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("undo").executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("undo").executes(c -> {
                 Chat.msg(route.removeLast() ? "Removed last waypoint." : "Route is empty.");
                 return 1;
             }));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("clear").executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("clear").executes(c -> {
                 route.clear();
                 Chat.msg("Route cleared.");
                 return 1;
             }));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("list").executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("list").executes(c -> {
                 Chat.msg(route.size() + " waypoints, particle=" + MushroomTracker.markers
                         + ", broken=" + controller.broken);
                 return 1;
             }));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("start").executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("start").executes(c -> {
                 if (route.size() == 0) Chat.msg("Record a route first with /gm add.");
                 else {
                     controller.start(mc);
@@ -55,12 +57,12 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 }
                 return 1;
             }));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("stop").executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("stop").executes(c -> {
                 controller.stop(mc);
                 Chat.msg("Stopped.");
                 return 1;
             }));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("scan").executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("scan").executes(c -> {
                 if (!MushroomTracker.scanning) {
                     MushroomTracker.scanning = true;
                     MushroomTracker.drainSeen();
@@ -72,12 +74,12 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 }
                 return 1;
             }));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("particle")
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("particle")
                     .executes(c -> {
                         Chat.msg("Current: " + MushroomTracker.markers + " (/gm particle potion to reset)");
                         return 1;
                     })
-                    .then(argument("ids", StringArgumentType.greedyString()).executes(c -> {
+                    .then(arg("ids", StringArgumentType.greedyString()).executes(c -> {
                         String in = StringArgumentType.getString(c, "ids").trim();
                         if (in.equalsIgnoreCase("potion")) {
                             MushroomTracker.markers = MushroomTracker.POTION_PARTICLES;
@@ -89,23 +91,27 @@ public class GlowingMushroomMod implements ClientModInitializer {
                         Chat.msg("Marker particles: " + MushroomTracker.markers);
                         return 1;
                     })));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("tool")
-                    .then(argument("regex", StringArgumentType.greedyString()).executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("tool")
+                    .then(arg("regex", StringArgumentType.greedyString()).executes(c -> {
                         controller.toolRegex = StringArgumentType.getString(c, "regex");
                         Chat.msg("Tool regex: " + controller.toolRegex);
                         return 1;
                     })));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("sword")
-                    .then(argument("regex", StringArgumentType.greedyString()).executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("sword")
+                    .then(arg("regex", StringArgumentType.greedyString()).executes(c -> {
                         controller.swordRegex = StringArgumentType.getString(c, "regex");
                         Chat.msg("Sword regex: " + controller.swordRegex);
                         return 1;
                     })));
-            root.then(LiteralArgumentBuilder.<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource>literal("speed").executes(c -> {
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("speed").executes(c -> {
                 Chat.msg("Tab list speed: " + MacroController.readTabSpeed(mc));
                 return 1;
             }));
             dispatcher.register(root);
         });
+    }
+
+    private static <T> RequiredArgumentBuilder<FabricClientCommandSource, T> arg(String name, ArgumentType<T> type) {
+        return RequiredArgumentBuilder.argument(name, type);
     }
 }
