@@ -8,6 +8,6 @@ public final class Chat {
 
     public static void msg(String s) {
         var mc = Minecraft.getInstance();
-        if (mc.player != null) mc.gui.getChat().addMessage(Component.literal("§a[GM] §f" + s));
+        if (mc.player != null) mc.player.sendSystemMessage(Component.literal("§a[GM] §f" + s));
     }
 }
