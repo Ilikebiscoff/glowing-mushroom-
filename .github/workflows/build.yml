@@ -27,10 +27,15 @@ jobs:
         with:
           name: glowing-mushroom-auto
           path: build/libs/glowing-mushroom-auto-*[0-9].jar
+      - name: Remove previous latest-build release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete latest-build --cleanup-tag --yes || true
       - name: Publish release with the jar
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-build
+          target_commitish: ${{ github.sha }}
           name: Latest build
           prerelease: true
           files: build/libs/glowing-mushroom-auto-*[0-9].jar
