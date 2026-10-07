@@ -96,6 +96,11 @@ public class GlowingMushroomMod implements ClientModInitializer {
                         Chat.msg("Marker particles: " + MushroomTracker.markers);
                         return 1;
                     })));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("nuker").executes(c -> {
+                controller.nuker = !controller.nuker;
+                Chat.msg("Nuker " + (controller.nuker ? "ON (breaks everything in reach, no aiming)" : "OFF (aimed mining)"));
+                return 1;
+            }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("speed").executes(c -> {
                 Chat.msg("Tab list speed: " + MacroController.readTabSpeed(mc));
                 return 1;

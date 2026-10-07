@@ -4,6 +4,7 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
@@ -53,6 +54,13 @@ public class MacroController {
     private int wait;
     private long nextSpeedCheck;
     private boolean warnedNoSpeed;
+
+    /** Nuker: break every tracked mushroom in reach at once, without aiming or line-of-sight checks. */
+    public volatile boolean nuker = true;
+    private static final double NUKE_REACH = 5.0;
+    private static final long NUKE_RETRY_MS = 250;
+    private final Map<BlockPos, Long> nukeAttempts = new HashMap<>();
+    private final Map<BlockPos, Long> nukeFirst = new HashMap<>();
 
     public int broken;
 
@@ -112,6 +120,13 @@ public class MacroController {
             return;
         }
 
+        if (nuker) {
+            nuke(mc, p, now);
+            mc.options.keyAttack.setDown(false);
+            walk(mc, p);
+            return;
+        }
+
         if (target != null) {
             if (!MushroomTracker.isMushroom(mc.level.getBlockState(target).getBlock())) {
                 broken++;
@@ -138,6 +153,37 @@ public class MacroController {
             mc.options.keyAttack.setDown(false);
             walk(mc, p);
         }
+    }
+
+    /** Sends a break for every tracked mushroom within reach; the route keeps walking meanwhile. */
+    private void nuke(Minecraft mc, LocalPlayer p, long now) {
+        Vec3 eyes = p.getEyePosition();
+        boolean swung = false;
+        for (BlockPos bp : MushroomTracker.MUSHROOMS.keySet()) {
+            if (blacklist.containsKey(bp)) continue;
+            if (eyes.distanceToSqr(bp.getCenter()) > NUKE_REACH * NUKE_REACH) continue;
+            Long first = nukeFirst.get(bp);
+            if (first == null) nukeFirst.put(bp, now);
+            else if (now - first > MINE_TIMEOUT_MS) {
+                blacklist.put(bp, now);
+                continue;
+            }
+            Long last = nukeAttempts.get(bp);
+            if (last != null && now - last < NUKE_RETRY_MS) continue;
+            nukeAttempts.put(bp, now);
+            mc.gameMode.startDestroyBlock(bp, Direction.UP);
+            if (!swung) {
+                p.swing(InteractionHand.MAIN_HAND);
+                swung = true;
+            }
+        }
+        // count and forget the ones that are gone
+        nukeFirst.keySet().removeIf(bp -> {
+            if (MushroomTracker.isMushroom(mc.level.getBlockState(bp).getBlock())) return false;
+            broken++;
+            nukeAttempts.remove(bp);
+            return true;
+        });
     }
 
     // ---- tool / speed handling ------------------------------------------------------------

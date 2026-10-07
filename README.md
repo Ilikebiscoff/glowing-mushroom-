@@ -22,3 +22,5 @@ Marker particles default to the potion set (`entity_effect`, `ambient_entity_eff
 2. Walk your loop and `/gm add` at each corner (`/gm undo`, `/gm clear`). Saved to `config/glowingmushroom_route.json`.
 3. `/gm start` / `/gm stop`. It loops the route, stops to mine tracked mushrooms within 4.4 blocks, and stops itself if stuck.
 FAH
+
+`/gm nuker` toggles nuker mode (default on): every tracked mushroom within 5 blocks is broken at once with no aiming; off = smooth aimed mining.
