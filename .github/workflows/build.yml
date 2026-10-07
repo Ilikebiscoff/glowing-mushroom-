@@ -24,18 +24,24 @@ jobs:
         run: gradle build --no-daemon
       - name: Inspect API (temporary)
         continue-on-error: true
+        shell: bash {0}
         run: |
-          echo "=== JARS ==="
-          find ~/.gradle -name '*.jar' | grep -iE 'minecraft|fabric-(rendering|lifecycle|api)' | head -40
-          for j in $(find ~/.gradle -name '*.jar' | grep -iE 'minecraft|fabric-rendering|fabric-api'); do
-            if unzip -l "$j" 2>/dev/null | grep -qE 'gizmos/Gizmos.class|WorldRenderEvents|LevelRenderEvents'; then
-              echo "=== $j ==="
-              unzip -l "$j" | grep -E 'gizmos/|RenderEvents' | awk '{print $4}' | head -60
-              for c in net.minecraft.gizmos.Gizmos net.minecraft.gizmos.GizmoStyle net.minecraft.gizmos.GizmoProperties net.minecraft.gizmos.TextGizmo net.minecraft.gizmos.TextGizmo\$Style net.minecraft.gizmos.CuboidGizmo net.minecraft.gizmos.LineGizmo net.minecraft.gizmos.GizmoCollector net.fabricmc.fabric.api.client.rendering.v1.world.LevelRenderEvents net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents; do
-                javap -public -cp "$j" "$c" 2>/dev/null
-              done
-            fi
+          RJ=$(find ~/.gradle -name 'fabric-rendering-v1-*.jar' | head -1)
+          echo "=== events ==="
+          for c in 'LevelRenderEvents' 'LevelRenderEvents$BeforeGizmos' 'LevelRenderEvents$CollectSubmits' 'LevelRenderEvents$EndMain' 'LevelRenderEvents$AfterTranslucentFeatures'; do
+            javap -public -cp "$RJ" "net.fabricmc.fabric.api.client.rendering.v1.level.$c"
           done
+          echo "=== context classes ==="
+          unzip -l "$RJ" | awk '{print $4}' | grep -E 'level/.*Context' | head
+          for c in $(unzip -l "$RJ" | awk '{print $4}' | grep -E 'level/.*Context.*\.class$' | sed 's/\.class//; s#/#.#g' | head -6); do javap -public -cp "$RJ" "$c"; done
+          echo "=== minecraft jars ==="
+          find / -name '*.jar' 2>/dev/null | grep -iE 'minecraft' | grep -v -E 'fabric-api|hostedtoolcache' | head -10
+          MJ=$(find / -name '*.jar' 2>/dev/null | grep -iE 'minecraft' | grep -v -E 'fabric-api|hostedtoolcache|sources' | xargs -I{} sh -c 'unzip -l "{}" 2>/dev/null | grep -q "net/minecraft/gizmos/Gizmos.class" && echo "{}"' | head -1)
+          echo "MJ=$MJ"
+          for c in net.minecraft.gizmos.Gizmos net.minecraft.gizmos.GizmoStyle net.minecraft.gizmos.GizmoProperties net.minecraft.gizmos.TextGizmo 'net.minecraft.gizmos.TextGizmo$Style' net.minecraft.gizmos.GizmoPrimitives; do
+            echo "--- $c"; javap -public -cp "$MJ" "$c"
+          done
+          unzip -l "$MJ" | awk '{print $4}' | grep 'net/minecraft/gizmos/' | head -40
       - name: Upload jar artifact
         uses: actions/upload-artifact@v4
         with:
