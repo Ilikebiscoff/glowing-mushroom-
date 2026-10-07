@@ -14,7 +14,7 @@ Needs JDK 25 and Gradle 9.4+ (Loom 1.15, plugin `net.fabricmc.fabric-loom`, no m
 
 ## Use
 Needs shears and a golden sword (Rogue Sword) in the hotbar, found by item type. Every ~25 s it reads `Speed:` from the tab list (enable the Speed tab widget in SkyBlock; `/gm speed` prints what it sees) and, if below 400, swaps to the sword, right-clicks, swaps back.
-Mouse movement uses eased, curved, sensitivity-quantised motion with reaction delay and overshoot (`HumanAim`).
+Camera movement runs every rendered frame as a damped spring with per-target stiffness, reaction delay, held aim error, hand drift and whole-pixel mouse steps (`HumanAim`).
 Marker particles default to the potion set (`entity_effect`, `ambient_entity_effect`, `effect`, `instant_effect`).
 
 1. Join the cave, stand near mushrooms, run `/gm scan`, wait ~5 s, run `/gm scan` again. It lists particle counts;

@@ -68,6 +68,12 @@ public class MacroController {
         this.route = route;
     }
 
+    /** Called every rendered frame so the camera moves smoothly instead of 20 times a second. */
+    public void frame(Minecraft mc) {
+        if (!running || mc.player == null || mc.screen != null) return;
+        aim.frame(mc, mc.player);
+    }
+
     public boolean isRunning() {
         return running;
     }
@@ -143,7 +149,7 @@ public class MacroController {
                 // aim somewhere inside the block, not the exact middle
                 targetPoint = target.getCenter().add((rand.nextDouble() - 0.5) * 0.4,
                         (rand.nextDouble() - 0.5) * 0.4, (rand.nextDouble() - 0.5) * 0.4);
-                aim.reset();
+                aim.retarget();
             }
         }
 
@@ -286,7 +292,8 @@ public class MacroController {
         mc.options.keySprint.setDown(false);
         mc.options.keyJump.setDown(false);
         float[] ang = anglesTo(p, targetPoint);
-        boolean aimed = aim.update(mc, p, ang[0], ang[1], 2.5f);
+        aim.setTarget(ang[0], ang[1]);
+        boolean aimed = aim.settled(p, 2.5f);
         boolean onTarget = aimed && mc.hitResult instanceof BlockHitResult bhr
                 && bhr.getType() == HitResult.Type.BLOCK && bhr.getBlockPos().equals(target);
         mc.options.keyAttack.setDown(onTarget);
@@ -305,7 +312,7 @@ public class MacroController {
         }
         float[] ang = anglesTo(p, new Vec3(wp.x, p.getEyeY(), wp.z));
         // people look a little downward while walking rather than dead level
-        aim.update(mc, p, ang[0], 6f, 3.5f);
+        aim.setTarget(ang[0], 6f);
         mc.options.keyUp.setDown(true);
         mc.options.keySprint.setDown(true);
         mc.options.keyJump.setDown(p.horizontalCollision && p.onGround());

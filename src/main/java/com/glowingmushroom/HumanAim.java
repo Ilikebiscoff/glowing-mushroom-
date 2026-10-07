@@ -7,134 +7,107 @@ import net.minecraft.util.Mth;
 import java.util.Random;
 
 /**
- * Moves the camera like a hand on a mouse instead of snapping or lerping at a constant rate:
+ * Camera control that behaves like a hand on a mouse. It runs once per rendered frame (not once per
+ * 20 Hz tick, which looks choppy) and feeds the player the same pixel-sized turns a real mouse does.
  * <ul>
- *   <li>reaction delay before a movement starts</li>
- *   <li>minimum-jerk speed profile (slow-fast-slow) with duration scaled to distance (Fitts-like)</li>
- *   <li>curved path, endpoint error and occasional overshoot followed by a small correction</li>
- *   <li>slow hand drift while idle</li>
- *   <li>every step is quantised to the real mouse-sensitivity step, so rotations look like pixel input</li>
+ *   <li>damped-spring tracking: smooth bell-shaped speed, fast for far targets, gentle for near ones</li>
+ *   <li>per-target "feel": different stiffness/damping each time, so some flicks overshoot slightly</li>
+ *   <li>reaction delay when a new target appears</li>
+ *   <li>a held aiming error per target, slow hand drift and a faint tremor</li>
+ *   <li>output quantised to whole mouse pixels at your sensitivity, remainder carried over</li>
  * </ul>
  */
 public class HumanAim {
     private final Random rand = new Random();
+    private final float[] ph = new float[6];
 
-    private boolean moving;
-    private int tick, duration, delay = -1;
-    private float totalYaw, totalPitch, appliedYaw, appliedPitch, curve;
-    private float plannedGoalYaw, plannedGoalPitch;
-    private final float phase1 = rand.nextFloat() * 6.28f, phase2 = rand.nextFloat() * 6.28f;
-    private long age;
+    private float tYaw, tPitch;           // where we want to look
+    private float offYaw, offPitch;       // aiming error held for the current target
+    private float velYaw, velPitch;       // deg/s
+    private float pxYaw, pxPitch;         // carried sub-pixel remainder
+    private float omega = 11f, zeta = 0.9f;
+    private double time, holdUntil;
+    private long lastNs;
 
-    /** Forget the current motion (call when the target changes completely). */
-    public void reset() {
-        moving = false;
-        delay = -1;
+    public HumanAim() {
+        for (int i = 0; i < ph.length; i++) ph[i] = rand.nextFloat() * 6.2832f;
+        retarget();
     }
 
-    /**
-     * Steps the camera toward the wanted angles for one tick.
-     * @return true when the crosshair is settled within {@code tolerance} degrees
-     */
-    public boolean update(Minecraft mc, LocalPlayer p, float wantYaw, float wantPitch, float tolerance) {
-        age++;
-        // slow wandering of the hand
-        wantYaw += 0.30f * (float) Math.sin(age * 0.045 + phase1);
-        wantPitch += 0.20f * (float) Math.sin(age * 0.061 + phase2);
+    /** Stops all motion (macro start/stop). */
+    public void reset() {
+        velYaw = velPitch = 0f;
+        pxYaw = pxPitch = 0f;
+        lastNs = 0;
+    }
+
+    /** Call when the thing being looked at changed (new mushroom): new reaction time, error and feel. */
+    public void retarget() {
+        offYaw = (float) rand.nextGaussian() * 0.35f;
+        offPitch = (float) rand.nextGaussian() * 0.25f;
+        omega = 9f + rand.nextFloat() * 6f;
+        zeta = 0.78f + rand.nextFloat() * 0.22f;
+        holdUntil = time + 0.09 + rand.nextFloat() * 0.13;
+    }
+
+    /** Sets the absolute angles to track (call every tick, cheap). */
+    public void setTarget(float yaw, float pitch) {
+        tYaw = yaw;
+        tPitch = pitch;
+    }
+
+    /** True when the crosshair rests within {@code tol} degrees of the target. */
+    public boolean settled(LocalPlayer p, float tol) {
+        float ey = Mth.wrapDegrees(tYaw - p.getYRot());
+        float ep = tPitch - p.getXRot();
+        return time >= holdUntil && Math.hypot(ey, ep) <= tol && Math.hypot(velYaw, velPitch) < 40f;
+    }
+
+    /** Advances the camera by the real time since the last call. Call once per rendered frame. */
+    public void frame(Minecraft mc, LocalPlayer p) {
+        long now = System.nanoTime();
+        if (lastNs == 0) lastNs = now;
+        float dt = Mth.clamp((now - lastNs) / 1e9f, 0.001f, 0.033f);
+        lastNs = now;
+        time += dt;
+
+        float wantYaw = tYaw + offYaw
+                + 0.35f * (float) Math.sin(time * 0.9 + ph[0]) + 0.15f * (float) Math.sin(time * 2.3 + ph[1]);
+        float wantPitch = tPitch + offPitch
+                + 0.22f * (float) Math.sin(time * 0.7 + ph[2]) + 0.10f * (float) Math.sin(time * 1.9 + ph[3]);
 
         float errYaw = Mth.wrapDegrees(wantYaw - p.getYRot());
         float errPitch = wantPitch - p.getXRot();
-        float dist = (float) Math.hypot(errYaw, errPitch);
 
-        if (!moving) {
-            if (dist <= tolerance) {
-                delay = -1;
-                return true;
-            }
-            if (delay < 0) delay = 1 + rand.nextInt(4); // reaction time, 50-200 ms
-            if (delay > 0) {
-                delay--;
-                return false;
-            }
-            plan(errYaw, errPitch, dist);
-            delay = -1;
+        if (time < holdUntil) {
+            // reacting: the hand hasn't started moving yet
+            float decay = (float) Math.exp(-12f * dt);
+            velYaw *= decay;
+            velPitch *= decay;
         } else {
-            // target walked away from where this motion is heading: aim the rest of it at the new spot
-            float gy = Mth.wrapDegrees(wantYaw - plannedGoalYaw);
-            float gp = wantPitch - plannedGoalPitch;
-            if (Math.hypot(gy, gp) > Math.max(6f, dist * 0.3f)) {
-                float remYaw = errYaw, remPitch = errPitch;
-                float done = progress();
-                totalYaw = appliedYaw + remYaw;
-                totalPitch = appliedPitch + remPitch;
-                plannedGoalYaw = wantYaw;
-                plannedGoalPitch = wantPitch;
-                duration = Math.max(duration, tick + 3);
-                if (done > 0.95f) moving = false;
+            float wy = omega, wp = omega * 0.85f; // vertical is a bit lazier than horizontal
+            velYaw += (wy * wy * errYaw - 2f * zeta * wy * velYaw) * dt;
+            velPitch += (wp * wp * errPitch - 2f * zeta * wp * velPitch) * dt;
+            float sp = (float) Math.hypot(velYaw, velPitch);
+            float max = 1000f;
+            if (sp > max) {
+                velYaw *= max / sp;
+                velPitch *= max / sp;
             }
         }
 
-        if (moving) step(mc, p);
-        return !moving && dist <= tolerance;
-    }
+        float dYaw = velYaw * dt + 0.015f * (float) Math.sin(time * 47 + ph[4]);
+        float dPitch = velPitch * dt + 0.010f * (float) Math.sin(time * 53 + ph[5]);
 
-    private void plan(float errYaw, float errPitch, float dist) {
-        // endpoint error grows a little with distance, like imprecise flicks
-        float noise = 0.12f + dist * 0.01f;
-        float ey = errYaw + (float) rand.nextGaussian() * noise;
-        float ep = errPitch + (float) rand.nextGaussian() * noise * 0.6f;
-        // large flicks sometimes overshoot, the follow-up motion then corrects it
-        if (dist > 12f && rand.nextFloat() < 0.35f) {
-            float over = 1f + 0.04f + rand.nextFloat() * 0.08f;
-            ey *= over;
-            ep *= over;
-        }
-        totalYaw = ey;
-        totalPitch = ep;
-        appliedYaw = appliedPitch = 0f;
-        float ms = (110f + 40f * (float) Math.sqrt(dist)) * (0.85f + rand.nextFloat() * 0.4f);
-        duration = Math.max(3, Math.round(ms / 50f));
-        tick = 0;
-        curve = (rand.nextFloat() - 0.5f) * 0.18f * dist; // sideways bulge in degrees
-        plannedGoalYaw = Mth.wrapDegrees(Minecraft.getInstance().player.getYRot() + errYaw);
-        plannedGoalPitch = Minecraft.getInstance().player.getXRot() + errPitch;
-        moving = true;
-    }
-
-    private float progress() {
-        return Math.min(1f, tick / (float) duration);
-    }
-
-    private void step(Minecraft mc, LocalPlayer p) {
-        tick++;
-        float t = progress();
-        float s = t * t * t * (10f + t * (-15f + 6f * t)); // minimum jerk
-        float len = (float) Math.hypot(totalYaw, totalPitch);
-        float perpYaw = len > 1e-3f ? -totalPitch / len : 0f;
-        float perpPitch = len > 1e-3f ? totalYaw / len : 0f;
-        float bulge = (float) Math.sin(Math.PI * t) * curve;
-        float wantedYaw = totalYaw * s + perpYaw * bulge;
-        float wantedPitch = totalPitch * s + perpPitch * bulge;
-
-        float stepDeg = sensitivityStep(mc);
-        float dy = snap(wantedYaw - appliedYaw, stepDeg);
-        float dp = snap(wantedPitch - appliedPitch, stepDeg);
-        appliedYaw += dy;
-        appliedPitch += dp;
-
-        p.setYRot(p.getYRot() + dy);
-        p.setXRot(Mth.clamp(p.getXRot() + dp, -90f, 90f));
-        if (tick >= duration) moving = false;
-    }
-
-    /** Degrees turned by one pixel of mouse movement at the player's sensitivity setting. */
-    private static float sensitivityStep(Minecraft mc) {
+        // feed whole mouse pixels, like real input; carry the remainder so nothing is lost
         double sens = mc.options.sensitivity().get();
         double f = sens * 0.6 + 0.2;
-        return (float) (f * f * f * 8.0 * 0.15);
-    }
-
-    private static float snap(float v, float step) {
-        return step <= 0f ? v : Math.round(v / step) * step;
+        float e = (float) (f * f * f * 8.0);   // what MouseHandler multiplies pixels by
+        float step = e * 0.15f;                // degrees per mouse pixel
+        float ty = dYaw / step + pxYaw, tp = dPitch / step + pxPitch;
+        int wy = Math.round(ty), wp = Math.round(tp);
+        pxYaw = ty - wy;
+        pxPitch = tp - wp;
+        if (wy != 0 || wp != 0) p.turn(wy * e, wp * e);
     }
 }

@@ -32,7 +32,10 @@ public class GlowingMushroomMod implements ClientModInitializer {
             controller.tick(mc);
         });
 
-        LevelRenderEvents.BEFORE_GIZMOS.register(context -> drawRoute());
+        LevelRenderEvents.BEFORE_GIZMOS.register(context -> {
+            controller.frame(Minecraft.getInstance());
+            drawRoute();
+        });
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             Minecraft mc = Minecraft.getInstance();
