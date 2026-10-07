@@ -6,7 +6,13 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.minecraft.client.Minecraft;
+import net.minecraft.gizmos.GizmoStyle;
+import net.minecraft.gizmos.Gizmos;
+import net.minecraft.gizmos.TextGizmo;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 import com.mojang.brigadier.arguments.ArgumentType;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
@@ -25,6 +31,8 @@ public class GlowingMushroomMod implements ClientModInitializer {
             MushroomTracker.tick(mc);
             controller.tick(mc);
         });
+
+        LevelRenderEvents.BEFORE_GIZMOS.register(context -> drawRoute());
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             Minecraft mc = Minecraft.getInstance();
@@ -98,5 +106,24 @@ public class GlowingMushroomMod implements ClientModInitializer {
 
     private static <T> RequiredArgumentBuilder<FabricClientCommandSource, T> arg(String name, ArgumentType<T> type) {
         return RequiredArgumentBuilder.argument(name, type);
+    }
+
+    private static final int RED = 0xFFFF2020;
+    private static final int RED_FILL = 0x30FF2020;
+
+    /** Red box on every waypoint, a red line to the next one (looping) and its number floating above. */
+    private void drawRoute() {
+        int n = route.size();
+        for (int i = 0; i < n; i++) {
+            Vec3 p = route.get(i);
+            Gizmos.cuboid(new AABB(p.x - 0.3, p.y, p.z - 0.3, p.x + 0.3, p.y + 0.6, p.z + 0.3),
+                    GizmoStyle.strokeAndFill(RED, 2f, RED_FILL)).setAlwaysOnTop();
+            if (n > 1) {
+                Vec3 q = route.get((i + 1) % n);
+                Gizmos.line(p.add(0, 0.3, 0), q.add(0, 0.3, 0), RED, 3f).setAlwaysOnTop();
+            }
+            Gizmos.billboardText(String.valueOf(i + 1), new Vec3(p.x, p.y + 1.1, p.z),
+                    TextGizmo.Style.forColorAndCentered(0xFFFFFFFF).withScale(1.6f)).setAlwaysOnTop();
+        }
     }
 }
