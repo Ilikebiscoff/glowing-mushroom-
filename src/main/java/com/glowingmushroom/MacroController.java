@@ -315,7 +315,7 @@ public class MacroController {
         aim.setTarget(ang[0], 6f);
         mc.options.keyUp.setDown(true);
         mc.options.keySprint.setDown(true);
-        mc.options.keyJump.setDown(p.horizontalCollision && p.onGround());
+        mc.options.keyJump.setDown(p.horizontalCollision && p.onGround() && needsStepUp(mc, p));
 
         Vec3 pos = p.position();
         if (lastPos != null && pos.distanceToSqr(lastPos) < 0.0004) stuckTicks++;
@@ -325,6 +325,21 @@ public class MacroController {
             Chat.msg("Stuck at waypoint " + (waypoint + 1) + " - macro stopped.");
             stop(mc);
         }
+    }
+
+    /**
+     * True only when a block in front blocks the feet and there is head room above it, i.e. a jump
+     * actually gets us up. Walking down a step or off a ledge never needs one.
+     */
+    private static boolean needsStepUp(Minecraft mc, LocalPlayer p) {
+        double yaw = Math.toRadians(p.getYRot());
+        double fx = -Math.sin(yaw) * 0.7, fz = Math.cos(yaw) * 0.7;
+        BlockPos feet = BlockPos.containing(p.getX() + fx, p.getY() + 0.1, p.getZ() + fz);
+        return isSolid(mc, feet) && !isSolid(mc, feet.above()) && !isSolid(mc, feet.above(2));
+    }
+
+    private static boolean isSolid(Minecraft mc, BlockPos pos) {
+        return !mc.level.getBlockState(pos).getCollisionShape(mc.level, pos).isEmpty();
     }
 
     private static float[] anglesTo(LocalPlayer p, Vec3 to) {
