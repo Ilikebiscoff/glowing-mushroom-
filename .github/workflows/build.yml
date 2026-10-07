@@ -22,6 +22,20 @@ jobs:
           gradle-version: 9.4.0
       - name: Build
         run: gradle build --no-daemon
+      - name: Inspect API (temporary)
+        continue-on-error: true
+        run: |
+          echo "=== JARS ==="
+          find ~/.gradle -name '*.jar' | grep -iE 'minecraft|fabric-(rendering|lifecycle|api)' | head -40
+          for j in $(find ~/.gradle -name '*.jar' | grep -iE 'minecraft|fabric-rendering|fabric-api'); do
+            if unzip -l "$j" 2>/dev/null | grep -qE 'gizmos/Gizmos.class|WorldRenderEvents|LevelRenderEvents'; then
+              echo "=== $j ==="
+              unzip -l "$j" | grep -E 'gizmos/|RenderEvents' | awk '{print $4}' | head -60
+              for c in net.minecraft.gizmos.Gizmos net.minecraft.gizmos.GizmoStyle net.minecraft.gizmos.GizmoProperties net.minecraft.gizmos.TextGizmo net.minecraft.gizmos.TextGizmo\$Style net.minecraft.gizmos.CuboidGizmo net.minecraft.gizmos.LineGizmo net.minecraft.gizmos.GizmoCollector net.fabricmc.fabric.api.client.rendering.v1.world.LevelRenderEvents net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents; do
+                javap -public -cp "$j" "$c" 2>/dev/null
+              done
+            fi
+          done
       - name: Upload jar artifact
         uses: actions/upload-artifact@v4
         with:
