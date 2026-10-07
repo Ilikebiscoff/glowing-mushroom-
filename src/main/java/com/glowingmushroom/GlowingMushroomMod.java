@@ -51,10 +51,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("start").executes(c -> {
                 if (route.size() == 0) Chat.msg("Record a route first with /gm add.");
-                else {
-                    controller.start(mc);
-                    Chat.msg("Started.");
-                }
+                else if (controller.start(mc)) Chat.msg("Started.");
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("stop").executes(c -> {
@@ -89,18 +86,6 @@ public class GlowingMushroomMod implements ClientModInitializer {
                             MushroomTracker.markers = set;
                         }
                         Chat.msg("Marker particles: " + MushroomTracker.markers);
-                        return 1;
-                    })));
-            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("tool")
-                    .then(arg("regex", StringArgumentType.greedyString()).executes(c -> {
-                        controller.toolRegex = StringArgumentType.getString(c, "regex");
-                        Chat.msg("Tool regex: " + controller.toolRegex);
-                        return 1;
-                    })));
-            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("sword")
-                    .then(arg("regex", StringArgumentType.greedyString()).executes(c -> {
-                        controller.swordRegex = StringArgumentType.getString(c, "regex");
-                        Chat.msg("Sword regex: " + controller.swordRegex);
                         return 1;
                     })));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("speed").executes(c -> {

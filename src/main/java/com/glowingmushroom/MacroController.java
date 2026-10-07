@@ -6,7 +6,9 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -31,8 +33,6 @@ public class MacroController {
     private static final long SPEED_CHECK_MS = 25_000;
     private static final Pattern SPEED = Pattern.compile("Speed:\\s*\\D*?(\\d+)");
 
-    public volatile String toolRegex = "(?i)moo?by.*shears";
-    public volatile String swordRegex = "(?i)rogue sword";
 
     private enum Phase { NONE, TO_SWORD, USED, TO_TOOL }
 
@@ -64,11 +64,12 @@ public class MacroController {
         return running;
     }
 
-    public void start(Minecraft mc) {
-        if (route.size() == 0 || mc.player == null) return;
-        if (findSlot(mc.player, toolRegex) < 0) {
-            Chat.msg("No hotbar item matching " + toolRegex + " (Mooby shears). Not started.");
-            return;
+    /** Returns true if the macro actually started. */
+    public boolean start(Minecraft mc) {
+        if (route.size() == 0 || mc.player == null) return false;
+        if (findSlot(mc.player, Items.SHEARS) < 0) {
+            Chat.msg("No shears in your hotbar. Not started.");
+            return false;
         }
         double best = Double.MAX_VALUE;
         for (int i = 0; i < route.size(); i++) {
@@ -84,6 +85,7 @@ public class MacroController {
         aim.reset();
         nextSpeedCheck = System.currentTimeMillis() + 2000; // check shortly after start
         running = true;
+        return true;
     }
 
     public void stop(Minecraft mc) {
@@ -154,9 +156,9 @@ public class MacroController {
                 return false;
             }
             if (speed >= SPEED_TARGET) return false;
-            int slot = findSlot(p, swordRegex);
+            int slot = findSlot(p, Items.GOLDEN_SWORD);
             if (slot < 0) {
-                Chat.msg("Speed is " + speed + " but no Rogue Sword in hotbar.");
+                Chat.msg("Speed is " + speed + " but no golden sword in hotbar.");
                 return false;
             }
             p.getInventory().setSelectedSlot(slot);
@@ -173,7 +175,7 @@ public class MacroController {
                 phase = Phase.USED;
             }
             case USED -> {
-                int tool = findSlot(p, toolRegex);
+                int tool = findSlot(p, Items.SHEARS);
                 if (tool >= 0) p.getInventory().setSelectedSlot(tool);
                 wait = 2 + rand.nextInt(3);
                 phase = Phase.TO_TOOL;
@@ -185,17 +187,17 @@ public class MacroController {
 
     /** Makes sure the Mooby shears are in hand. Returns false if they can't be found. */
     private boolean ensureTool(LocalPlayer p) {
-        int slot = findSlot(p, toolRegex);
+        int slot = findSlot(p, Items.SHEARS);
         if (slot < 0) return false;
         if (p.getInventory().getSelectedSlot() != slot) p.getInventory().setSelectedSlot(slot);
         return true;
     }
 
-    private static int findSlot(LocalPlayer p, String regex) {
-        Pattern pat = Pattern.compile(regex);
+    /** First hotbar slot holding the given item type, or -1. */
+    private static int findSlot(LocalPlayer p, Item item) {
         for (int i = 0; i < 9; i++) {
             ItemStack st = p.getInventory().getItem(i);
-            if (!st.isEmpty() && pat.matcher(st.getHoverName().getString()).find()) return i;
+            if (!st.isEmpty() && st.is(item)) return i;
         }
         return -1;
     }
