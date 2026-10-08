@@ -7,6 +7,8 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
+import com.glowingmushroom.pathing.Planner;
+import com.glowingmushroom.pathing.WalkCache;
 import net.minecraft.client.Minecraft;
 import net.minecraft.gizmos.GizmoStyle;
 import net.minecraft.gizmos.Gizmos;
@@ -21,14 +23,16 @@ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 public class GlowingMushroomMod implements ClientModInitializer {
     private Route route;
     private MacroController controller;
+    private final WalkCache cache = new WalkCache();
 
     @Override
     public void onInitializeClient() {
         route = new Route(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_route.json"));
-        controller = new MacroController(route);
+        controller = new MacroController(route, cache);
 
         ClientTickEvents.START_CLIENT_TICK.register(mc -> {
             MushroomTracker.tick(mc);
+            cache.tick(mc);
             controller.tick(mc);
         });
 
@@ -36,6 +40,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
             controller.frame(Minecraft.getInstance());
             drawRoute();
             drawMushrooms();
+            drawPlan();
         });
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
@@ -62,8 +67,11 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("start").executes(c -> {
-                if (route.size() == 0) Chat.msg("Record a route first with /glowing add.");
-                else if (controller.start(mc)) Chat.msg("Started.");
+                if (controller.start(mc)) {
+                    Chat.msg("Started (" + (controller.pathMode ? "path" : "route") + " mode).");
+                    if (controller.pathMode && route.size() == 0)
+                        Chat.msg("Tip: record a patrol route with /glowing add so it can search when no mushrooms are known.");
+                }
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("stop").executes(c -> {
@@ -112,6 +120,21 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 Chat.msg("Tab list speed: " + MacroController.readTabSpeed(mc));
                 return 1;
             }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("mode")
+                    .executes(c -> {
+                        Chat.msg("Mode: " + (controller.pathMode ? "path" : "route") + " (/glowing mode path|route)");
+                        return 1;
+                    })
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("path").executes(c -> {
+                        controller.pathMode = true;
+                        Chat.msg("Path mode: pathfinds to the densest mushroom groups, route = patrol when none known.");
+                        return 1;
+                    }))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("route").executes(c -> {
+                        controller.pathMode = false;
+                        Chat.msg("Route mode: only walks the recorded route.");
+                        return 1;
+                    })));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("highlight").executes(c -> {
                 highlight = !highlight;
                 Chat.msg("Mushroom highlight " + (highlight ? "ON" : "OFF"));
@@ -137,6 +160,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing clear - delete the whole route");
         Chat.msg(" /glowing list - route size, particle, mushrooms broken");
         Chat.msg(" /glowing start | stop - run or stop the macro");
+        Chat.msg(" /glowing mode path|route - pathfind to mushroom groups (default) or only walk the route");
         Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
         Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
         Chat.msg(" /glowing particle [ids|reset|potion] - show/set the marker particle");
@@ -164,6 +188,24 @@ public class GlowingMushroomMod implements ClientModInitializer {
             Gizmos.cuboid(bp, cur ? GizmoStyle.strokeAndFill(YELLOW, 2.5f, YELLOW_FILL)
                     : GizmoStyle.strokeAndFill(GREEN, 2f, GREEN_FILL)).setAlwaysOnTop();
         }
+    }
+
+    private static final int CYAN = 0xFF30E0FF;
+    private static final int CYAN_FILL = 0x3030E0FF;
+
+    /** Cyan line along the planned path, cyan box on the standing spot, number of mushrooms above it. */
+    private void drawPlan() {
+        if (!highlight) return;
+        Planner.Leg leg = controller.currentLeg();
+        if (leg == null) return;
+        var pts = leg.path();
+        for (int i = 0; i + 1 < pts.size(); i++)
+            Gizmos.line(pts.get(i).add(0, 0.1, 0), pts.get(i + 1).add(0, 0.1, 0), CYAN, 3f).setAlwaysOnTop();
+        var st = leg.stand();
+        Gizmos.cuboid(new AABB(st.getX() + 0.2, st.getY(), st.getZ() + 0.2, st.getX() + 0.8, st.getY() + 0.1, st.getZ() + 0.8),
+                GizmoStyle.strokeAndFill(CYAN, 2f, CYAN_FILL)).setAlwaysOnTop();
+        Gizmos.billboardText(leg.targets().size() + "x", new Vec3(st.getX() + 0.5, st.getY() + 2.3, st.getZ() + 0.5),
+                TextGizmo.Style.forColorAndCentered(CYAN).withScale(1.3f)).setAlwaysOnTop();
     }
 
     private static final int RED = 0xFFFF2020;

@@ -15,15 +15,25 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
+import com.glowingmushroom.pathing.Planner;
+import com.glowingmushroom.pathing.WalkCache;
+
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Walks the route in a loop, breaks tracked mushrooms with the Mooby shears and, every ~25 s,
- * reads the tab list and uses the Rogue Sword's speed ability when speed is below 400.
+ * Path mode (default): goes to the densest reachable group of known glowing mushrooms using the
+ * background {@link Planner}, clears it, and moves straight on to the next group; walks the recorded
+ * route as a patrol while no mushrooms are known. Route mode: just loops the route.
+ * Breaks mushrooms with the shears (nuker or aimed), and every ~25 s reads the tab list and uses the
+ * golden sword's speed ability when speed is below 400.
  */
 public class MacroController {
     private static final double REACH = 4.4;
@@ -42,7 +52,31 @@ public class MacroController {
     private enum Phase { NONE, TO_SWORD, USED, TO_TOOL }
 
     private final Route route;
+    private final WalkCache cache;
+    private final Planner planner = new Planner();
     private final HumanAim aim = new HumanAim();
+
+    /** A list of points being walked, with progress. */
+    private static final class Cursor {
+        final List<Vec3> pts;
+        final boolean loop;
+        int idx;
+
+        Cursor(List<Vec3> pts, boolean loop) {
+            this.pts = pts;
+            this.loop = loop;
+        }
+    }
+
+    private enum Follow { MOVING, ARRIVED, STUCK }
+
+    /** true = pathfind to mushroom groups (route is a patrol fallback); false = only walk the route. */
+    public volatile boolean pathMode = true;
+    private Planner.Leg leg, nextLeg;
+    private Cursor legCursor, routeCursor;
+    private long arrivedAt, lastPlanRequest;
+    private int legStuck, seenVersion = -1;
+    private boolean planDirty;
     private final Random rand = new Random();
     private final Map<BlockPos, Long> blacklist = new HashMap<>();
 
@@ -68,8 +102,9 @@ public class MacroController {
 
     public int broken;
 
-    public MacroController(Route route) {
+    public MacroController(Route route, WalkCache cache) {
         this.route = route;
+        this.cache = cache;
     }
 
     /** Called every rendered frame so the camera moves smoothly instead of 20 times a second. */
@@ -84,20 +119,20 @@ public class MacroController {
 
     /** Returns true if the macro actually started. */
     public boolean start(Minecraft mc) {
-        if (route.size() == 0 || mc.player == null) return false;
+        if (mc.player == null) return false;
+        if (!pathMode && route.size() == 0) {
+            Chat.msg("Route mode needs a route: record one with /glowing add.");
+            return false;
+        }
         if (findSlot(mc.player, Items.SHEARS) < 0) {
             Chat.msg("No shears in your hotbar. Not started.");
             return false;
         }
-        double best = Double.MAX_VALUE;
-        for (int i = 0; i < route.size(); i++) {
-            double d = route.get(i).distanceToSqr(mc.player.position());
-            if (d < best) {
-                best = d;
-                waypoint = i;
-            }
-        }
         target = null;
+        leg = nextLeg = null;
+        legCursor = routeCursor = null;
+        planDirty = true;
+        lastPlanRequest = 0;
         stuckTicks = 0;
         phase = Phase.NONE;
         aim.reset();
@@ -123,7 +158,7 @@ public class MacroController {
 
         if (handleSpeedBoost(mc, p, now)) {
             mc.options.keyAttack.setDown(false);
-            walk(mc, p);
+            navigate(mc, p, now);
             return;
         }
         if (!ensureTool(p)) {
@@ -133,7 +168,7 @@ public class MacroController {
         if (nuker) {
             nuke(mc, p, now);
             mc.options.keyAttack.setDown(false);
-            walk(mc, p);
+            navigate(mc, p, now);
             return;
         }
 
@@ -161,7 +196,7 @@ public class MacroController {
             mine(mc, p);
         } else {
             mc.options.keyAttack.setDown(false);
-            walk(mc, p);
+            navigate(mc, p, now);
         }
     }
 
@@ -303,62 +338,200 @@ public class MacroController {
         mc.options.keyAttack.setDown(onTarget);
     }
 
-    private void walk(Minecraft mc, LocalPlayer p) {
-        int n = route.size();
-        if (n == 0) {
-            stop(mc);
+    // ---- navigation --------------------------------------------------------------------------
+
+    private void navigate(Minecraft mc, LocalPlayer p, long now) {
+        if (!pathMode) {
+            patrol(mc, p);
             return;
         }
-        Vec3 pos = p.position();
-        Vec3 wp = route.get(waypoint);
-        Vec3 prev = n > 1 ? route.get((waypoint - 1 + n) % n) : pos;
 
-        // Advance when close enough (radius grows with speed) or when we've already gone past the
-        // waypoint along the segment. Overshooting at high speed used to make it turn back and circle.
-        double speed = Math.hypot(p.getDeltaMovement().x, p.getDeltaMovement().z); // blocks per tick
-        double arrive = Math.max(ARRIVE_DIST, speed * 4);
-        if (hDist(pos, wp) < arrive || (n > 1 && segmentT(prev, wp, pos) >= 1.0)) {
-            waypoint = (waypoint + 1) % n;
-            wp = route.get(waypoint);
-            prev = n > 1 ? route.get((waypoint - 1 + n) % n) : pos;
+        Planner.Plan plan = planner.poll();
+        if (plan != null) accept(plan, p);
+
+        int v = MushroomTracker.version();
+        if (v != seenVersion) {
+            seenVersion = v;
+            planDirty = true;
+        }
+        long interval = leg == null ? 600 : 2000;
+        if ((planDirty || now - lastPlanRequest > interval) && now - lastPlanRequest > 250) requestPlan(p, now);
+
+        // current group cleared -> take the pre-planned next one immediately
+        if (leg != null && !alive(leg)) {
+            leg = nextLeg != null && alive(nextLeg) ? nextLeg : null;
+            nextLeg = null;
+            if (leg != null) beginLeg(leg, p);
+            planDirty = true;
         }
 
-        // Aim at a point a few blocks ahead on the path instead of the waypoint itself, so corners
-        // are rounded off smoothly and the camera never whips around when a waypoint is right underfoot.
-        Vec3 carrot = n > 1 ? carrot(prev, pos) : wp;
-        float[] ang = anglesTo(p, new Vec3(carrot.x, p.getEyeY(), carrot.z));
-        // people look a little downward while walking rather than dead level
-        aim.setTarget(ang[0], 6f, WALK_TURN_SPEED, 0.6f);
+        if (leg == null) {
+            patrol(mc, p);
+            return;
+        }
+        routeCursor = null; // re-pick the nearest waypoint next time we patrol
 
-        // Turn first, then walk: no running in circles when the next point is behind us.
+        Follow r = follow(mc, p, legCursor, 20);
+        if (r == Follow.ARRIVED) {
+            if (arrivedAt == 0) arrivedAt = now;
+            else if (now - arrivedAt > 1500) { // standing here but they won't break
+                for (BlockPos t : leg.targets()) blacklist.put(t, now);
+                leg = null;
+                planDirty = true;
+            }
+        } else if (r == Follow.STUCK) {
+            if (++legStuck >= 2) {
+                for (BlockPos t : leg.targets()) blacklist.put(t, now);
+                leg = null;
+            }
+            planDirty = true;
+        }
+    }
+
+    private void requestPlan(LocalPlayer p, long now) {
+        List<BlockPos> ms = new ArrayList<>();
+        for (BlockPos m : MushroomTracker.snapshot()) if (!blacklist.containsKey(m)) ms.add(m);
+        Set<BlockPos> keep = leg == null ? Set.of() : new HashSet<>(leg.targets());
+        if (planner.request(cache.grid(), p.blockPosition(), ms, keep)) {
+            lastPlanRequest = now;
+            planDirty = false;
+        }
+    }
+
+    private void accept(Planner.Plan plan, LocalPlayer p) {
+        if (plan.legs().isEmpty()) {
+            if (leg != null && !alive(leg)) leg = null;
+            nextLeg = null;
+            return;
+        }
+        Planner.Leg first = plan.legs().get(0);
+        nextLeg = plan.legs().size() > 1 ? plan.legs().get(1) : null;
+        if (leg != null && first.stand().equals(leg.stand())) return; // same goal, keep walking smoothly
+        leg = first;
+        beginLeg(first, p);
+    }
+
+    private void beginLeg(Planner.Leg l, LocalPlayer p) {
+        legCursor = new Cursor(l.path(), false);
+        // continue from the path point nearest to us
+        List<Vec3> pts = l.path();
+        int best = 0;
+        double bd = Double.MAX_VALUE;
+        for (int i = 0; i < pts.size(); i++) {
+            double d = pts.get(i).distanceToSqr(p.position());
+            if (d < bd) {
+                bd = d;
+                best = i;
+            }
+        }
+        legCursor.idx = Math.min(best + 1, pts.size() - 1);
+        arrivedAt = 0;
+        legStuck = 0;
+        stuckTicks = 0;
+    }
+
+    /** Some of the leg's mushrooms are still there to break. */
+    private boolean alive(Planner.Leg l) {
+        for (BlockPos t : l.targets())
+            if (MushroomTracker.MUSHROOMS.containsKey(t) && !blacklist.containsKey(t)) return true;
+        return false;
+    }
+
+    /** Walks the recorded route in a loop; idles if there is none. */
+    private void patrol(Minecraft mc, LocalPlayer p) {
+        if (route.size() == 0) {
+            mc.options.keyUp.setDown(false);
+            mc.options.keySprint.setDown(false);
+            mc.options.keyJump.setDown(false);
+            return;
+        }
+        if (routeCursor == null || routeCursor.pts.size() != route.size()) {
+            routeCursor = new Cursor(route.points(), true);
+            double best = Double.MAX_VALUE;
+            for (int i = 0; i < routeCursor.pts.size(); i++) {
+                double d = routeCursor.pts.get(i).distanceToSqr(p.position());
+                if (d < best) {
+                    best = d;
+                    routeCursor.idx = i;
+                }
+            }
+        }
+        waypoint = routeCursor.idx;
+        if (follow(mc, p, routeCursor, 60) == Follow.STUCK) {
+            Chat.msg("Stuck at waypoint " + (routeCursor.idx + 1) + " - macro stopped.");
+            stop(mc);
+        }
+    }
+
+    /**
+     * Walks along {@code c}: pure-pursuit steering at a point ahead on the path, speed-scaled arrival,
+     * turn-before-walk on sharp corners, jump only when a block must be climbed.
+     */
+    private Follow follow(Minecraft mc, LocalPlayer p, Cursor c, int stuckLimit) {
+        int n = c.pts.size();
+        Vec3 pos = p.position();
+        if (n == 0 || (!c.loop && c.idx >= n)) return arrive(mc);
+
+        Vec3 wp = c.pts.get(c.idx);
+        boolean hasPrev = c.loop ? n > 1 : c.idx > 0;
+        Vec3 prev = hasPrev ? c.pts.get((c.idx - 1 + n) % n) : pos;
+
+        double speed = Math.hypot(p.getDeltaMovement().x, p.getDeltaMovement().z); // blocks per tick
+        boolean last = !c.loop && c.idx == n - 1;
+        double arrive = last ? 0.6 : Math.max(ARRIVE_DIST, speed * 4);
+        if (hDist(pos, wp) < arrive || (hasPrev && segmentT(prev, wp, pos) >= 1.0)) {
+            c.idx++;
+            if (!c.loop && c.idx >= n) return arrive(mc);
+            c.idx %= n;
+            wp = c.pts.get(c.idx);
+            hasPrev = c.loop ? n > 1 : c.idx > 0;
+            prev = hasPrev ? c.pts.get((c.idx - 1 + n) % n) : pos;
+            last = !c.loop && c.idx == n - 1;
+        }
+
+        Vec3 carrot = hasPrev ? carrot(c, prev, pos) : wp;
+        float[] ang = anglesTo(p, new Vec3(carrot.x, p.getEyeY(), carrot.z));
+        aim.setTarget(ang[0], 6f, WALK_TURN_SPEED, 0.6f); // a little downward, like a person walking
+
         float headingErr = Math.abs(net.minecraft.util.Mth.wrapDegrees(ang[0] - p.getYRot()));
+        boolean finalApproach = last && hDist(pos, wp) < 2.5;
         mc.options.keyUp.setDown(headingErr < 75f);
-        mc.options.keySprint.setDown(headingErr < 35f);
+        mc.options.keySprint.setDown(headingErr < 35f && !finalApproach);
         mc.options.keyJump.setDown(p.horizontalCollision && p.onGround() && needsStepUp(mc, p));
 
         if (lastPos != null && pos.distanceToSqr(lastPos) < 0.0004 && headingErr < 75f) stuckTicks++;
         else stuckTicks = 0;
         lastPos = pos;
-        if (stuckTicks > 60) {
-            Chat.msg("Stuck at waypoint " + (waypoint + 1) + " - macro stopped.");
-            stop(mc);
+        if (stuckTicks > stuckLimit) {
+            stuckTicks = 0;
+            return Follow.STUCK;
         }
+        return Follow.MOVING;
     }
 
-    /** Point LOOKAHEAD blocks further along the route from our projection onto the current segment. */
-    private Vec3 carrot(Vec3 prev, Vec3 pos) {
-        int n = route.size();
-        Vec3 a = prev, b = route.get(waypoint);
+    private Follow arrive(Minecraft mc) {
+        mc.options.keyUp.setDown(false);
+        mc.options.keySprint.setDown(false);
+        mc.options.keyJump.setDown(false);
+        stuckTicks = 0;
+        return Follow.ARRIVED;
+    }
+
+    /** Point LOOKAHEAD blocks further along the points from our projection onto the current segment. */
+    private static Vec3 carrot(Cursor c, Vec3 prev, Vec3 pos) {
+        int n = c.pts.size();
+        Vec3 a = prev, b = c.pts.get(c.idx);
         double t = Math.max(0, Math.min(1, segmentT(a, b, pos)));
         Vec3 cur = a.add(b.subtract(a).scale(t));
         double left = LOOKAHEAD;
-        int idx = waypoint;
+        int idx = c.idx;
         for (int k = 0; k < n; k++) {
-            Vec3 target = route.get(idx);
+            Vec3 target = c.pts.get(idx);
             double d = hDist(cur, target);
             if (d >= left) return cur.add(target.subtract(cur).scale(left / d));
             left -= d;
             cur = target;
+            if (!c.loop && idx == n - 1) return cur;
             idx = (idx + 1) % n;
         }
         return cur;
@@ -403,6 +576,11 @@ public class MacroController {
                 mc.options.keyJump, mc.options.keyAttack}) {
             k.setDown(false);
         }
+    }
+
+    /** The leg being walked (for rendering), or null. */
+    public Planner.Leg currentLeg() {
+        return running && pathMode ? leg : null;
     }
 
     public BlockPos currentTarget() {

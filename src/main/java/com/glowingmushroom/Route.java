@@ -60,6 +60,12 @@ public class Route {
         return new Vec3(p[0], p[1], p[2]);
     }
 
+    public List<Vec3> points() {
+        List<Vec3> out = new ArrayList<>();
+        for (int i = 0; i < points.size(); i++) out.add(get(i));
+        return out;
+    }
+
     private void save() {
         try {
             Files.createDirectories(file.getParent());

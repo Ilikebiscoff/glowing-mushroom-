@@ -25,3 +25,11 @@ FAH
 
 `/glowing nuker` toggles nuker mode (default on): every tracked mushroom within 5 blocks is broken at once with no aiming; off = smooth aimed mining.
 `/glowing help` lists every command. `/glowing highlight` toggles the green boxes on tracked mushrooms (yellow = current target).
+
+## Path mode (default)
+`/glowing mode path` - mushrooms found from their particles are remembered as you move. A background
+thread groups them, finds the standing spot that has the most of them in nuker reach, and paths there
+(A*: walking, diagonals, 1-block step ups, drops up to 3). Groups are scored by
+`mushrooms / (walk cost + 6)`, so a big group a bit further away beats a single one next to you. The next
+group is planned while walking to the current one. With nothing known it walks the recorded route as a
+patrol. Cyan line/box = current plan. `/glowing mode route` = old route-only behaviour.

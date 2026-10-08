@@ -33,7 +33,10 @@ public class MushroomTracker {
 
     private static final ConcurrentLinkedQueue<ClientboundLevelParticlesPacket> QUEUE = new ConcurrentLinkedQueue<>();
     private static final Map<String, Integer> SEEN = new HashMap<>();
-    private static final long EXPIRE_MS = 8000;
+    /** Forget a mushroom if no particle confirmed it for this long while we were close enough to see it. */
+    private static final long EXPIRE_MS = 60_000;
+    private static final double SEE_RANGE = 24;
+    private static final java.util.concurrent.atomic.AtomicInteger VERSION = new java.util.concurrent.atomic.AtomicInteger();
 
     /** Known mushrooms -> last time (ms) a particle confirmed them. */
     public static final Map<BlockPos, Long> MUSHROOMS = new ConcurrentHashMap<>();
@@ -53,15 +56,31 @@ public class MushroomTracker {
             if (scanning) SEEN.merge(name, 1, Integer::sum);
             if (!markers.contains(name)) continue;
             BlockPos hit = findMushroom(level, p.getX(), p.getY(), p.getZ());
-            if (hit != null) MUSHROOMS.put(hit, System.currentTimeMillis());
+            if (hit != null && MUSHROOMS.put(hit, System.currentTimeMillis()) == null) VERSION.incrementAndGet();
         }
         long now = System.currentTimeMillis();
         for (Iterator<Map.Entry<BlockPos, Long>> it = MUSHROOMS.entrySet().iterator(); it.hasNext(); ) {
             var en = it.next();
-            if (level == null || now - en.getValue() > EXPIRE_MS || !isMushroom(level.getBlockState(en.getKey()).getBlock())) {
+            BlockPos bp = en.getKey();
+            if (level == null) {
+                it.remove();
+                continue;
+            }
+            if (!level.isLoaded(bp)) continue; // out of loaded range: keep remembering it
+            boolean near = mc.player != null && mc.player.position().distanceToSqr(bp.getCenter()) < SEE_RANGE * SEE_RANGE;
+            if (!isMushroom(level.getBlockState(bp).getBlock()) || (near && now - en.getValue() > EXPIRE_MS)) {
                 it.remove();
             }
         }
+    }
+
+    /** Changes every time a new mushroom is discovered (planner re-plans on change). */
+    public static int version() {
+        return VERSION.get();
+    }
+
+    public static java.util.List<BlockPos> snapshot() {
+        return new java.util.ArrayList<>(MUSHROOMS.keySet());
     }
 
     public static Map<String, Integer> drainSeen() {
