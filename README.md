@@ -45,3 +45,13 @@ Dark panel in the top left: macro time, Glowing Mushrooms (+2 per broken glowing
 mushrooms (+1 per broken non-glowing red/brown mushroom), coins at live Bazaar instant-sell prices (refreshed
 every 5 min), total and coins/hour. A break is counted once the block stays gone for 0.4 s (server confirmed).
 `/glowing hud` toggles it, `/glowing reset` zeroes it. Falling in water also triggers `/warp glowing`.
+
+## Fail-safe (on by default, `/glowing failsafe` toggles)
+While the macro is meant to be running (`/glowing start` .. `/glowing stop`):
+- **Kicked / disconnected** -> reconnects to the same server after 10 s, backing off up to 2 min (max 10 tries).
+  Quitting on purpose (not the "Disconnected" screen) never reconnects.
+- **Limbo** (no sidebar) -> `/lobby`; **lobby** (sidebar isn't SkyBlock) -> `/skyblock`;
+  **wrong SkyBlock area** -> `/warp glowing`, then waits until a sidebar line contains the cave text
+  (default `glowing`, change with `/glowing zone <text>`, check with `/glowing where`) and resumes.
+- **Died** -> `/warp glowing`. In water / stuck 6 s -> `/warp glowing` (as before).
+Commands are sent at most every 8-10 s; after 6 failed tries it waits a minute. The HUD status shows what it's doing.

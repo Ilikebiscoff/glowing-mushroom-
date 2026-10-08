@@ -22,21 +22,6 @@ jobs:
           gradle-version: 9.4.0
       - name: Build
         run: gradle build --no-daemon -Pmod_version=2.1.${{ github.run_number }}
-      - name: Inspect API (temporary)
-        continue-on-error: true
-        shell: bash {0}
-        run: |
-          MJ=$(find . -path '*loom-cache*' -name 'minecraft-merged-*.jar' | head -1)
-          FJ=$(find ~/.gradle -name 'fabric-networking-api-v1-*.jar' | head -1)
-          LJ=$(find ~/.gradle -name 'fabric-lifecycle-events-v1-*.jar' | head -1)
-          MSG=$(find ~/.gradle -name 'fabric-message-api-v1-*.jar' | head -1)
-          CP="$MJ:$FJ:$LJ:$MSG"
-          unzip -l "$MJ" | awk '{print $4}' | grep -E 'screens/(ConnectScreen|DisconnectedScreen|TitleScreen)|multiplayer/(JoinMultiplayerScreen|resolver/ServerAddress)|multiplayer/ServerData\.class|scores/(Scoreboard|Objective|DisplaySlot|PlayerTeam|PlayerScoreEntry)\.class'
-          for c in net.minecraft.client.gui.screens.ConnectScreen net.minecraft.client.multiplayer.resolver.ServerAddress net.minecraft.client.multiplayer.ServerData; do echo "--- $c"; javap -public -cp "$CP" "$c" | grep -E 'static|public .*\(|class' | head -25; done
-          for c in net.minecraft.world.scores.Scoreboard net.minecraft.world.scores.PlayerTeam net.minecraft.world.scores.PlayerScoreEntry net.minecraft.world.scores.Objective net.minecraft.world.scores.DisplaySlot; do echo "--- $c"; javap -public -cp "$CP" "$c" | grep -iE 'class|record|getDisplayObjective|listPlayerScores|getPlayersTeam|formatNameForTeam|getPlayerPrefix|getPlayerSuffix|owner|display|SIDEBAR|getDisplayName|isHidden|value' | head -30; done
-          javap -public -cp "$MJ" net.minecraft.client.Minecraft | grep -iE 'getCurrentServer|disconnect|setScreen|isSingleplayer'
-          unzip -l "$MJ" | awk '{print $4}' | grep -E 'DisconnectedScreen|TitleScreen\.class|JoinMultiplayerScreen\.class'
-          for c in net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents 'net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents$Disconnect' 'net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents$Join' net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents 'net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents$Game'; do echo "--- $c"; javap -public -cp "$CP" "$c" | head -12; done
       - name: Upload jar artifact
         uses: actions/upload-artifact@v4
         with:

@@ -26,21 +26,31 @@ public class GlowingMushroomMod implements ClientModInitializer {
     private Route route;
     private MacroController controller;
     private final WalkCache cache = new WalkCache();
+    private Failsafe failsafe;
 
     @Override
     public void onInitializeClient() {
         route = new Route(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_route.json"));
         controller = new MacroController(route, cache);
+        failsafe = new Failsafe(controller);
+
+        net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.JOIN.register(
+                (handler, sender, client) -> failsafe.onJoin(client));
+        net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register(
+                (handler, client) -> failsafe.onDisconnect(client));
+        net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents.GAME.register(
+                (message, overlay) -> { if (!overlay) failsafe.onGameMessage(message.getString()); });
 
         ClientTickEvents.START_CLIENT_TICK.register(mc -> {
             MushroomTracker.tick(mc);
             cache.tick(mc);
             controller.tick(mc);
+            failsafe.tick(mc);
             ProfitTracker.tick(mc, controller.isRunning());
         });
 
         HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("glowingmushroomauto", "profit"),
-                (graphics, delta) -> ProfitHud.render(graphics, delta, controller::isRunning));
+                (graphics, delta) -> ProfitHud.render(graphics, delta, controller::isRunning, failsafe::wanted));
 
         LevelRenderEvents.BEFORE_GIZMOS.register(context -> {
             controller.frame(Minecraft.getInstance());
@@ -73,15 +83,13 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("start").executes(c -> {
-                if (controller.start(mc)) {
-                    Chat.msg("Started (" + (controller.pathMode ? "path" : "route") + " mode).");
-                    if (controller.pathMode && route.size() == 0)
-                        Chat.msg("Tip: record a patrol route with /glowing add so it can search when no mushrooms are known.");
-                }
+                failsafe.begin(mc);
+                if (controller.pathMode && route.size() == 0)
+                    Chat.msg("Tip: record a patrol route with /glowing add so it can search when no mushrooms are known.");
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("stop").executes(c -> {
-                controller.stop(mc);
+                failsafe.end(mc);
                 Chat.msg("Stopped.");
                 return 1;
             }));
@@ -146,6 +154,32 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 Chat.msg("Mushroom highlight " + (highlight ? "ON" : "OFF"));
                 return 1;
             }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("failsafe").executes(c -> {
+                failsafe.enabled = !failsafe.enabled;
+                Chat.msg("Fail-safe (reconnect, rejoin SkyBlock, /warp glowing) " + (failsafe.enabled ? "ON" : "OFF"));
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("zone")
+                    .executes(c -> {
+                        Chat.msg("Cave is detected when a sidebar line contains: \"" + failsafe.zoneText + "\"");
+                        return 1;
+                    })
+                    .then(arg("text", StringArgumentType.greedyString()).executes(c -> {
+                        failsafe.zoneText = StringArgumentType.getString(c, "text").trim();
+                        Chat.msg("Cave text set to \"" + failsafe.zoneText + "\"");
+                        return 1;
+                    })));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("where").executes(c -> {
+                var lines = Failsafe.sidebar(mc);
+                if (lines == null) {
+                    Chat.msg("No sidebar (Limbo or loading).");
+                } else {
+                    Chat.msg("Sidebar: " + Failsafe.sidebarTitle(mc));
+                    for (String l : lines) if (!l.isBlank()) Chat.msg(" " + l);
+                    Chat.msg("In cave: " + failsafe.inZone(mc));
+                }
+                return 1;
+            }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("hud").executes(c -> {
                 ProfitHud.enabled = !ProfitHud.enabled;
                 Chat.msg("Profit HUD " + (ProfitHud.enabled ? "ON" : "OFF"));
@@ -180,6 +214,9 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
         Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
         Chat.msg(" /glowing hud - toggle the profit panel (top left)");
+        Chat.msg(" /glowing failsafe - toggle auto reconnect / rejoin SkyBlock / warp back");
+        Chat.msg(" /glowing zone [text] - sidebar text that means you're in the cave");
+        Chat.msg(" /glowing where - show the sidebar lines and whether you're in the cave");
         Chat.msg(" /glowing reset - reset profit, counts and time");
         Chat.msg(" /glowing particle [ids|reset|potion] - show/set the marker particle");
         Chat.msg(" /glowing scan - run twice near mushrooms to list particle types");

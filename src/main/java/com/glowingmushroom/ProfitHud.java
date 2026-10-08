@@ -26,16 +26,18 @@ public final class ProfitHud {
 
     private record Row(String label, String value, int color) {}
 
-    public static void render(GuiGraphicsExtractor g, DeltaTracker delta, BooleanSupplier running) {
+    public static void render(GuiGraphicsExtractor g, DeltaTracker delta, BooleanSupplier running, BooleanSupplier wanted) {
         Minecraft mc = Minecraft.getInstance();
         if (!enabled || mc.player == null || mc.options.hideGui) return;
         boolean run = running.getAsBoolean();
-        if (!run && ProfitTracker.macroMs == 0 && ProfitTracker.glowing == 0) return;
+        String fs = wanted.getAsBoolean() ? Failsafe.status : null;
+        if (!run && fs == null && ProfitTracker.macroMs == 0 && ProfitTracker.glowing == 0) return;
         Font f = mc.font;
 
         boolean priced = ProfitTracker.glowingPrice >= 0;
         List<Row> rows = new ArrayList<>();
-        rows.add(new Row("Status", run ? "Running" : "Paused", run ? ACCENT : 0xFFFF6B6B));
+        if (fs != null) rows.add(new Row("Status", fs, 0xFFFFB347));
+        else rows.add(new Row("Status", run ? "Running" : "Paused", run ? ACCENT : 0xFFFF6B6B));
         rows.add(new Row("Time", time(ProfitTracker.macroMs), VALUE));
         rows.add(new Row("Glowing", ProfitTracker.glowing + "  " + coins(ProfitTracker.glowing * ProfitTracker.glowingPrice, priced), GLOW));
         long regular = ProfitTracker.red + ProfitTracker.brown;
