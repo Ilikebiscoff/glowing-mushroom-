@@ -24,9 +24,11 @@ public class MushroomTracker {
     /** Potion-style particles (how 1.8 SPELL_* particles arrive after protocol translation). */
     public static final Set<String> POTION_PARTICLES = Set.of("minecraft:entity_effect",
             "minecraft:ambient_entity_effect", "minecraft:effect", "minecraft:instant_effect");
-    /** Registry ids treated as the mushroom marker. Change with /gm particle. */
-    public static volatile Set<String> markers = POTION_PARTICLES;
-    /** While true every particle id is counted so the right marker can be found (/gm scan). */
+    /** Default marker: the potion swirl particle Hypixel puts on glowing mushrooms. */
+    public static final Set<String> DEFAULT_PARTICLES = Set.of("minecraft:entity_effect");
+    /** Registry ids treated as the mushroom marker. Change with /glowing particle. */
+    public static volatile Set<String> markers = DEFAULT_PARTICLES;
+    /** While true every particle id is counted so the right marker can be found (/glowing scan). */
     public static volatile boolean scanning = false;
 
     private static final ConcurrentLinkedQueue<ClientboundLevelParticlesPacket> QUEUE = new ConcurrentLinkedQueue<>();
@@ -68,7 +70,10 @@ public class MushroomTracker {
         return copy;
     }
 
-    /** Checks the particle's block and its neighbours for a mushroom; returns the closest. */
+    /**
+     * Checks the particle's block and its neighbours for a mushroom and returns the closest. Small
+     * mushroom plants win over giant-mushroom blocks so a nearby cap/stem doesn't steal the match.
+     */
     private static BlockPos findMushroom(ClientLevel level, double x, double y, double z) {
         BlockPos base = BlockPos.containing(x, y, z);
         BlockPos best = null;
@@ -77,8 +82,10 @@ public class MushroomTracker {
             for (int dy = -1; dy <= 1; dy++)
                 for (int dz = -1; dz <= 1; dz++) {
                     BlockPos bp = base.offset(dx, dy, dz);
-                    if (!isMushroom(level.getBlockState(bp).getBlock())) continue;
+                    Block b = level.getBlockState(bp).getBlock();
+                    if (!isMushroom(b)) continue;
                     double d = bp.distToCenterSqr(x, y, z);
+                    if (b != Blocks.RED_MUSHROOM && b != Blocks.BROWN_MUSHROOM) d += 100;
                     if (d < bestDist) {
                         bestDist = d;
                         best = bp;

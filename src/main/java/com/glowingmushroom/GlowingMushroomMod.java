@@ -35,11 +35,12 @@ public class GlowingMushroomMod implements ClientModInitializer {
         LevelRenderEvents.BEFORE_GIZMOS.register(context -> {
             controller.frame(Minecraft.getInstance());
             drawRoute();
+            drawMushrooms();
         });
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             Minecraft mc = Minecraft.getInstance();
-            var root = LiteralArgumentBuilder.<FabricClientCommandSource>literal("gm");
+            var root = LiteralArgumentBuilder.<FabricClientCommandSource>literal("glowing");
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("add").executes(c -> {
                 var p = mc.player;
                 route.add(p.getX(), p.getY(), p.getZ());
@@ -61,7 +62,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("start").executes(c -> {
-                if (route.size() == 0) Chat.msg("Record a route first with /gm add.");
+                if (route.size() == 0) Chat.msg("Record a route first with /glowing add.");
                 else if (controller.start(mc)) Chat.msg("Started.");
                 return 1;
             }));
@@ -74,22 +75,25 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 if (!MushroomTracker.scanning) {
                     MushroomTracker.scanning = true;
                     MushroomTracker.drainSeen();
-                    Chat.msg("Counting particles. Stand near glowing mushrooms, then run /gm scan again.");
+                    Chat.msg("Counting particles. Stand near glowing mushrooms, then run /glowing scan again.");
                 } else {
                     MushroomTracker.scanning = false;
                     MushroomTracker.drainSeen().forEach((k, v) -> Chat.msg(k + ": " + v));
-                    Chat.msg("Pick the one that only shows on mushrooms: /gm particle <id>");
+                    Chat.msg("Pick the one that only shows on mushrooms: /glowing particle <id>");
                 }
                 return 1;
             }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("particle")
                     .executes(c -> {
-                        Chat.msg("Current: " + MushroomTracker.markers + " (/gm particle potion to reset)");
+                        Chat.msg("Current: " + MushroomTracker.markers
+                                + " (/glowing particle reset = entity_effect, /glowing particle potion = all potion types)");
                         return 1;
                     })
                     .then(arg("ids", StringArgumentType.greedyString()).executes(c -> {
                         String in = StringArgumentType.getString(c, "ids").trim();
-                        if (in.equalsIgnoreCase("potion")) {
+                        if (in.equalsIgnoreCase("reset")) {
+                            MushroomTracker.markers = MushroomTracker.DEFAULT_PARTICLES;
+                        } else if (in.equalsIgnoreCase("potion")) {
                             MushroomTracker.markers = MushroomTracker.POTION_PARTICLES;
                         } else {
                             var set = new java.util.HashSet<String>();
@@ -108,12 +112,58 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 Chat.msg("Tab list speed: " + MacroController.readTabSpeed(mc));
                 return 1;
             }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("highlight").executes(c -> {
+                highlight = !highlight;
+                Chat.msg("Mushroom highlight " + (highlight ? "ON" : "OFF"));
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("help").executes(c -> {
+                help();
+                return 1;
+            }));
+            root.executes(c -> {
+                help();
+                return 1;
+            });
             dispatcher.register(root);
         });
     }
 
+    private static void help() {
+        Chat.msg("Commands:");
+        Chat.msg(" /glowing help - this list");
+        Chat.msg(" /glowing add - add a waypoint where you stand");
+        Chat.msg(" /glowing undo - remove the last waypoint");
+        Chat.msg(" /glowing clear - delete the whole route");
+        Chat.msg(" /glowing list - route size, particle, mushrooms broken");
+        Chat.msg(" /glowing start | stop - run or stop the macro");
+        Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
+        Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
+        Chat.msg(" /glowing particle [ids|reset|potion] - show/set the marker particle");
+        Chat.msg(" /glowing scan - run twice near mushrooms to list particle types");
+        Chat.msg(" /glowing speed - show the speed read from the tab list");
+    }
+
     private static <T> RequiredArgumentBuilder<FabricClientCommandSource, T> arg(String name, ArgumentType<T> type) {
         return RequiredArgumentBuilder.argument(name, type);
+    }
+
+    private boolean highlight = true;
+
+    private static final int GREEN = 0xFF30FF60;
+    private static final int GREEN_FILL = 0x4030FF60;
+    private static final int YELLOW = 0xFFFFE030;
+    private static final int YELLOW_FILL = 0x50FFE030;
+
+    /** Green box on every tracked glowing mushroom, yellow on the one being mined. */
+    private void drawMushrooms() {
+        if (!highlight) return;
+        var target = controller.currentTarget();
+        for (var bp : MushroomTracker.MUSHROOMS.keySet()) {
+            boolean cur = bp.equals(target);
+            Gizmos.cuboid(bp, cur ? GizmoStyle.strokeAndFill(YELLOW, 2.5f, YELLOW_FILL)
+                    : GizmoStyle.strokeAndFill(GREEN, 2f, GREEN_FILL)).setAlwaysOnTop();
+        }
     }
 
     private static final int RED = 0xFFFF2020;

@@ -13,14 +13,15 @@ Needs JDK 25 and Gradle 9.4+ (Loom 1.15, plugin `net.fabricmc.fabric-loom`, no m
 `gradle build` -> `build/libs/`. Requires Fabric API `0.145.4+26.1.2`.
 
 ## Use
-Needs shears and a golden sword (Rogue Sword) in the hotbar, found by item type. Every ~25 s it reads `Speed:` from the tab list (enable the Speed tab widget in SkyBlock; `/gm speed` prints what it sees) and, if below 400, swaps to the sword, right-clicks, swaps back.
+Needs shears and a golden sword (Rogue Sword) in the hotbar, found by item type. Every ~25 s it reads `Speed:` from the tab list (enable the Speed tab widget in SkyBlock; `/glowing speed` prints what it sees) and, if below 400, swaps to the sword, right-clicks, swaps back.
 Camera movement runs every rendered frame as a damped spring with per-target stiffness, reaction delay, held aim error, hand drift and whole-pixel mouse steps (`HumanAim`).
 Marker particles default to the potion set (`entity_effect`, `ambient_entity_effect`, `effect`, `instant_effect`).
 
-1. Join the cave, stand near mushrooms, run `/gm scan`, wait ~5 s, run `/gm scan` again. It lists particle counts;
-   set the one that only appears on mushrooms with `/gm particle <id>` (default is the potion set; `/gm particle potion` restores it).
-2. Walk your loop and `/gm add` at each corner (`/gm undo`, `/gm clear`). Saved to `config/glowingmushroom_route.json`.
-3. `/gm start` / `/gm stop`. It loops the route, stops to mine tracked mushrooms within 4.4 blocks, and stops itself if stuck.
+1. Join the cave, stand near mushrooms, run `/glowing scan`, wait ~5 s, run `/glowing scan` again. It lists particle counts;
+   set the one that only appears on mushrooms with `/glowing particle <id>` (default `minecraft:entity_effect`; `/glowing particle reset` restores it).
+2. Walk your loop and `/glowing add` at each corner (`/glowing undo`, `/glowing clear`). Saved to `config/glowingmushroom_route.json`.
+3. `/glowing start` / `/glowing stop`. It loops the route, stops to mine tracked mushrooms within 4.4 blocks, and stops itself if stuck.
 FAH
 
-`/gm nuker` toggles nuker mode (default on): every tracked mushroom within 5 blocks is broken at once with no aiming; off = smooth aimed mining.
+`/glowing nuker` toggles nuker mode (default on): every tracked mushroom within 5 blocks is broken at once with no aiming; off = smooth aimed mining.
+`/glowing help` lists every command. `/glowing highlight` toggles the green boxes on tracked mushrooms (yellow = current target).

@@ -26,6 +26,7 @@ public class HumanAim {
     private float velYaw, velPitch;       // deg/s
     private float pxYaw, pxPitch;         // carried sub-pixel remainder
     private float omega = 11f, zeta = 0.9f;
+    private float maxSpeed = 1000f, stiffness = 1f;
     private double time, holdUntil;
     private long lastNs;
 
@@ -52,8 +53,18 @@ public class HumanAim {
 
     /** Sets the absolute angles to track (call every tick, cheap). */
     public void setTarget(float yaw, float pitch) {
+        setTarget(yaw, pitch, 1000f, 1f);
+    }
+
+    /**
+     * @param maxSpeed  turn speed cap in deg/s (walking uses a low one so it never whips around)
+     * @param stiffness multiplier on the spring (below 1 = lazier, smoother tracking)
+     */
+    public void setTarget(float yaw, float pitch, float maxSpeed, float stiffness) {
         tYaw = yaw;
         tPitch = pitch;
+        this.maxSpeed = maxSpeed;
+        this.stiffness = stiffness;
     }
 
     /** True when the crosshair rests within {@code tol} degrees of the target. */
@@ -85,11 +96,12 @@ public class HumanAim {
             velYaw *= decay;
             velPitch *= decay;
         } else {
-            float wy = omega, wp = omega * 0.85f; // vertical is a bit lazier than horizontal
+            float w = omega * stiffness;
+            float wy = w, wp = w * 0.85f; // vertical is a bit lazier than horizontal
             velYaw += (wy * wy * errYaw - 2f * zeta * wy * velYaw) * dt;
             velPitch += (wp * wp * errPitch - 2f * zeta * wp * velPitch) * dt;
             float sp = (float) Math.hypot(velYaw, velPitch);
-            float max = 1000f;
+            float max = maxSpeed;
             if (sp > max) {
                 velYaw *= max / sp;
                 velPitch *= max / sp;

@@ -27,7 +27,11 @@ import java.util.regex.Pattern;
  */
 public class MacroController {
     private static final double REACH = 4.4;
-    private static final double ARRIVE_DIST = 0.7;
+    private static final double ARRIVE_DIST = 1.2;
+    /** How far ahead along the route the camera aims while walking (pure-pursuit "carrot"). */
+    private static final double LOOKAHEAD = 3.0;
+    /** Camera turn speed cap while walking, deg/s. */
+    private static final float WALK_TURN_SPEED = 240f;
     private static final long MINE_TIMEOUT_MS = 3500;
     private static final long BLACKLIST_MS = 15000;
     private static final int SPEED_TARGET = 400;
@@ -300,31 +304,75 @@ public class MacroController {
     }
 
     private void walk(Minecraft mc, LocalPlayer p) {
-        if (route.size() == 0) {
+        int n = route.size();
+        if (n == 0) {
             stop(mc);
             return;
         }
+        Vec3 pos = p.position();
         Vec3 wp = route.get(waypoint);
-        double dx = wp.x - p.getX(), dz = wp.z - p.getZ();
-        if (Math.sqrt(dx * dx + dz * dz) < ARRIVE_DIST && Math.abs(wp.y - p.getY()) < 2.5) {
-            waypoint = (waypoint + 1) % route.size();
-            return;
+        Vec3 prev = n > 1 ? route.get((waypoint - 1 + n) % n) : pos;
+
+        // Advance when close enough (radius grows with speed) or when we've already gone past the
+        // waypoint along the segment. Overshooting at high speed used to make it turn back and circle.
+        double speed = Math.hypot(p.getDeltaMovement().x, p.getDeltaMovement().z); // blocks per tick
+        double arrive = Math.max(ARRIVE_DIST, speed * 4);
+        if (hDist(pos, wp) < arrive || (n > 1 && segmentT(prev, wp, pos) >= 1.0)) {
+            waypoint = (waypoint + 1) % n;
+            wp = route.get(waypoint);
+            prev = n > 1 ? route.get((waypoint - 1 + n) % n) : pos;
         }
-        float[] ang = anglesTo(p, new Vec3(wp.x, p.getEyeY(), wp.z));
+
+        // Aim at a point a few blocks ahead on the path instead of the waypoint itself, so corners
+        // are rounded off smoothly and the camera never whips around when a waypoint is right underfoot.
+        Vec3 carrot = n > 1 ? carrot(prev, pos) : wp;
+        float[] ang = anglesTo(p, new Vec3(carrot.x, p.getEyeY(), carrot.z));
         // people look a little downward while walking rather than dead level
-        aim.setTarget(ang[0], 6f);
-        mc.options.keyUp.setDown(true);
-        mc.options.keySprint.setDown(true);
+        aim.setTarget(ang[0], 6f, WALK_TURN_SPEED, 0.6f);
+
+        // Turn first, then walk: no running in circles when the next point is behind us.
+        float headingErr = Math.abs(net.minecraft.util.Mth.wrapDegrees(ang[0] - p.getYRot()));
+        mc.options.keyUp.setDown(headingErr < 75f);
+        mc.options.keySprint.setDown(headingErr < 35f);
         mc.options.keyJump.setDown(p.horizontalCollision && p.onGround() && needsStepUp(mc, p));
 
-        Vec3 pos = p.position();
-        if (lastPos != null && pos.distanceToSqr(lastPos) < 0.0004) stuckTicks++;
+        if (lastPos != null && pos.distanceToSqr(lastPos) < 0.0004 && headingErr < 75f) stuckTicks++;
         else stuckTicks = 0;
         lastPos = pos;
         if (stuckTicks > 60) {
             Chat.msg("Stuck at waypoint " + (waypoint + 1) + " - macro stopped.");
             stop(mc);
         }
+    }
+
+    /** Point LOOKAHEAD blocks further along the route from our projection onto the current segment. */
+    private Vec3 carrot(Vec3 prev, Vec3 pos) {
+        int n = route.size();
+        Vec3 a = prev, b = route.get(waypoint);
+        double t = Math.max(0, Math.min(1, segmentT(a, b, pos)));
+        Vec3 cur = a.add(b.subtract(a).scale(t));
+        double left = LOOKAHEAD;
+        int idx = waypoint;
+        for (int k = 0; k < n; k++) {
+            Vec3 target = route.get(idx);
+            double d = hDist(cur, target);
+            if (d >= left) return cur.add(target.subtract(cur).scale(left / d));
+            left -= d;
+            cur = target;
+            idx = (idx + 1) % n;
+        }
+        return cur;
+    }
+
+    /** Horizontal position of {@code pos} along segment a→b: 0 at a, 1 at b. */
+    private static double segmentT(Vec3 a, Vec3 b, Vec3 pos) {
+        double sx = b.x - a.x, sz = b.z - a.z, len2 = sx * sx + sz * sz;
+        if (len2 < 1e-6) return 1;
+        return ((pos.x - a.x) * sx + (pos.z - a.z) * sz) / len2;
+    }
+
+    private static double hDist(Vec3 a, Vec3 b) {
+        return Math.hypot(a.x - b.x, a.z - b.z);
     }
 
     /**
@@ -355,6 +403,10 @@ public class MacroController {
                 mc.options.keyJump, mc.options.keyAttack}) {
             k.setDown(false);
         }
+    }
+
+    public BlockPos currentTarget() {
+        return target;
     }
 
     public int waypointIndex() {
