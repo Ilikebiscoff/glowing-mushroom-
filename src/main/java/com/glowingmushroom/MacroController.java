@@ -40,6 +40,13 @@ public class MacroController {
     private static final double ARRIVE_DIST = 1.2;
     /** How far ahead along the route the camera aims while walking (pure-pursuit "carrot"). */
     private static final double LOOKAHEAD = 3.0;
+    /** Shorter look-ahead on planner paths so it doesn't cut the corners the pathfinder went around. */
+    private static final double LOOKAHEAD_PATH = 1.5;
+    /** No real movement for this long while trying to walk -> /warp glowing. */
+    private static final long WARP_AFTER_MS = 6000;
+    private static final long WARP_COOLDOWN_MS = 20_000;
+    private static final long WARP_PAUSE_MS = 3000;
+    private static final long AVOID_MS = 30_000;
     /** Camera turn speed cap while walking, deg/s. */
     private static final float WALK_TURN_SPEED = 240f;
     private static final long MINE_TIMEOUT_MS = 3500;
@@ -77,6 +84,15 @@ public class MacroController {
     private long arrivedAt, lastPlanRequest;
     private int legStuck, seenVersion = -1;
     private boolean planDirty;
+
+    // stuck handling
+    private final Map<BlockPos, Long> avoid = new HashMap<>();
+    private Cursor wdCursor;
+    private int wdIdx, wdTicks, recoverTicks;
+    private double wdBest;
+    private boolean moving;
+    private Vec3 anchor;
+    private long anchorTime, lastWarp, warpPauseUntil;
     private final Random rand = new Random();
     private final Map<BlockPos, Long> blacklist = new HashMap<>();
 
@@ -133,6 +149,11 @@ public class MacroController {
         legCursor = routeCursor = null;
         planDirty = true;
         lastPlanRequest = 0;
+        avoid.clear();
+        recoverTicks = 0;
+        wdCursor = null;
+        anchor = null;
+        warpPauseUntil = 0;
         stuckTicks = 0;
         phase = Phase.NONE;
         aim.reset();
@@ -154,7 +175,42 @@ public class MacroController {
             return;
         }
         long now = System.currentTimeMillis();
+        if (now < warpPauseUntil) { // waiting for the warp teleport + chunks
+            releaseKeys(mc);
+            anchor = null;
+            return;
+        }
+        moving = false;
+        tickInner(mc, p, now);
+        warpCheck(mc, p, now);
+    }
+
+    /** Warps out if we've been trying to walk for 6 s without getting anywhere. */
+    private void warpCheck(Minecraft mc, LocalPlayer p, long now) {
+        Vec3 pos = p.position();
+        if (!moving || anchor == null || hDist(pos, anchor) > 1.5 || Math.abs(pos.y - anchor.y) > 1.5) {
+            anchor = pos;
+            anchorTime = now;
+            return;
+        }
+        if (now - anchorTime < WARP_AFTER_MS || now - lastWarp < WARP_COOLDOWN_MS) return;
+        lastWarp = now;
+        Chat.msg("Stuck for 6s - /warp glowing");
+        releaseKeys(mc);
+        p.connection.sendCommand("warp glowing");
+        warpPauseUntil = now + WARP_PAUSE_MS;
+        leg = nextLeg = null;
+        legCursor = routeCursor = null;
+        avoid.clear();
+        recoverTicks = 0;
+        wdCursor = null;
+        anchor = null;
+        planDirty = true;
+    }
+
+    private void tickInner(Minecraft mc, LocalPlayer p, long now) {
         blacklist.values().removeIf(t -> now - t > BLACKLIST_MS);
+        avoid.values().removeIf(t -> now - t > AVOID_MS);
 
         if (handleSpeedBoost(mc, p, now)) {
             mc.options.keyAttack.setDown(false);
@@ -371,7 +427,7 @@ public class MacroController {
         }
         routeCursor = null; // re-pick the nearest waypoint next time we patrol
 
-        Follow r = follow(mc, p, legCursor, 20);
+        Follow r = follow(mc, p, legCursor);
         if (r == Follow.ARRIVED) {
             if (arrivedAt == 0) arrivedAt = now;
             else if (now - arrivedAt > 1500) { // standing here but they won't break
@@ -392,7 +448,7 @@ public class MacroController {
         List<BlockPos> ms = new ArrayList<>();
         for (BlockPos m : MushroomTracker.snapshot()) if (!blacklist.containsKey(m)) ms.add(m);
         Set<BlockPos> keep = leg == null ? Set.of() : new HashSet<>(leg.targets());
-        if (planner.request(cache.grid(), p.blockPosition(), ms, keep)) {
+        if (planner.request(cache.grid(), p.blockPosition(), ms, keep, new HashSet<>(avoid.keySet()))) {
             lastPlanRequest = now;
             planDirty = false;
         }
@@ -457,19 +513,29 @@ public class MacroController {
             }
         }
         waypoint = routeCursor.idx;
-        if (follow(mc, p, routeCursor, 60) == Follow.STUCK) {
-            Chat.msg("Stuck at waypoint " + (routeCursor.idx + 1) + " - macro stopped.");
-            stop(mc);
-        }
+        follow(mc, p, routeCursor); // stuck -> backs off and retries; 6 s without progress -> warp
     }
 
     /**
-     * Walks along {@code c}: pure-pursuit steering at a point ahead on the path, speed-scaled arrival,
-     * turn-before-walk on sharp corners, jump only when a block must be climbed.
+     * Walks along {@code c}: pure-pursuit steering at a point ahead on the path (only if the straight
+     * line there is walkable), speed-scaled arrival, turn-before-walk on sharp corners, jumps where the
+     * path steps up, and a progress watchdog that backs off and reports STUCK.
      */
-    private Follow follow(Minecraft mc, LocalPlayer p, Cursor c, int stuckLimit) {
+    private Follow follow(Minecraft mc, LocalPlayer p, Cursor c) {
         int n = c.pts.size();
         Vec3 pos = p.position();
+
+        if (recoverTicks > 0) { // back off and hop after getting stuck
+            recoverTicks--;
+            mc.options.keyUp.setDown(false);
+            mc.options.keySprint.setDown(false);
+            mc.options.keyDown.setDown(recoverTicks > 0);
+            mc.options.keyJump.setDown(recoverTicks > 0 && p.onGround());
+            moving = true;
+            return Follow.MOVING;
+        }
+        mc.options.keyDown.setDown(false);
+
         if (n == 0 || (!c.loop && c.idx >= n)) return arrive(mc);
 
         Vec3 wp = c.pts.get(c.idx);
@@ -478,8 +544,11 @@ public class MacroController {
 
         double speed = Math.hypot(p.getDeltaMovement().x, p.getDeltaMovement().z); // blocks per tick
         boolean last = !c.loop && c.idx == n - 1;
-        double arrive = last ? 0.6 : Math.max(ARRIVE_DIST, speed * 4);
-        if (hDist(pos, wp) < arrive || (hasPrev && segmentT(prev, wp, pos) >= 1.0)) {
+        double arrive = last ? Math.max(0.6, speed * 2.5) : Math.max(ARRIVE_DIST, speed * 4);
+        boolean stepUp = wp.y - p.getY() >= 0.6;
+        // don't skip a step-up point early: we must actually climb it
+        if ((hDist(pos, wp) < arrive && !stepUp) || (hasPrev && !stepUp && segmentT(prev, wp, pos) >= 1.0)
+                || (stepUp && hDist(pos, wp) < 0.6 && p.getY() >= wp.y - 0.1)) {
             c.idx++;
             if (!c.loop && c.idx >= n) return arrive(mc);
             c.idx %= n;
@@ -487,25 +556,67 @@ public class MacroController {
             hasPrev = c.loop ? n > 1 : c.idx > 0;
             prev = hasPrev ? c.pts.get((c.idx - 1 + n) % n) : pos;
             last = !c.loop && c.idx == n - 1;
+            stepUp = wp.y - p.getY() >= 0.6;
         }
+        double toWp = hDist(pos, wp);
 
-        Vec3 carrot = hasPrev ? carrot(c, prev, pos) : wp;
+        // steer: carrot ahead on the path, but face a step squarely and never aim through walls
+        Vec3 carrot = hasPrev ? carrot(c, prev, pos, c.loop ? LOOKAHEAD : LOOKAHEAD_PATH) : wp;
+        if (stepUp && toWp < 2.5) carrot = wp;
+        else if (!c.loop && !Planner.walkable(cache.grid(), pos, carrot)) carrot = wp;
         float[] ang = anglesTo(p, new Vec3(carrot.x, p.getEyeY(), carrot.z));
         aim.setTarget(ang[0], 6f, WALK_TURN_SPEED, 0.6f); // a little downward, like a person walking
 
         float headingErr = Math.abs(net.minecraft.util.Mth.wrapDegrees(ang[0] - p.getYRot()));
-        boolean finalApproach = last && hDist(pos, wp) < 2.5;
-        mc.options.keyUp.setDown(headingErr < 75f);
-        mc.options.keySprint.setDown(headingErr < 35f && !finalApproach);
-        mc.options.keyJump.setDown(p.horizontalCollision && p.onGround() && needsStepUp(mc, p));
+        boolean coast = last && toWp < speed * 3 + 0.3; // let it roll to a stop on the stand spot
+        boolean careful = (last && toWp < 2.5) || (stepUp && toWp < 2.5);
+        mc.options.keyUp.setDown(headingErr < 75f && !coast);
+        mc.options.keySprint.setDown(headingErr < 35f && !careful);
 
-        if (lastPos != null && pos.distanceToSqr(lastPos) < 0.0004 && headingErr < 75f) stuckTicks++;
-        else stuckTicks = 0;
-        lastPos = pos;
-        if (stuckTicks > stuckLimit) {
-            stuckTicks = 0;
+        // jump where the path climbs, or when a block in our way really needs climbing
+        boolean jump = false;
+        if (p.onGround()) {
+            if (stepUp && toWp < 1.3) jump = true;
+            else if (p.horizontalCollision) {
+                double dx, dz;
+                if (speed > 0.05) {
+                    dx = p.getDeltaMovement().x / speed;
+                    dz = p.getDeltaMovement().z / speed;
+                } else {
+                    double d = Math.max(1e-6, toWp);
+                    dx = (wp.x - pos.x) / d;
+                    dz = (wp.z - pos.z) / d;
+                }
+                jump = needsStepUp(mc, p, dx, dz);
+            }
+        }
+        mc.options.keyJump.setDown(jump);
+
+        // progress watchdog: must get 0.3 blocks closer to the current point within 25 ticks
+        if (c != wdCursor || c.idx != wdIdx) {
+            wdCursor = c;
+            wdIdx = c.idx;
+            wdBest = toWp;
+            wdTicks = 0;
+        } else if (toWp < wdBest - 0.3) {
+            wdBest = toWp;
+            wdTicks = 0;
+        } else if (headingErr < 75f && ++wdTicks > 25) {
+            wdTicks = 0;
+            wdCursor = null;
+            long now = System.currentTimeMillis();
+            BlockPos here = p.blockPosition();
+            BlockPos there = BlockPos.containing(wp.x, wp.y, wp.z);
+            for (int ax = -1; ax <= 1; ax++)
+                for (int az = -1; az <= 1; az++) {
+                    avoid.put(here.offset(ax, 0, az), now);
+                }
+            avoid.put(there, now);
+            recoverTicks = 6;
+            moving = true;
             return Follow.STUCK;
         }
+        moving = true;
         return Follow.MOVING;
     }
 
@@ -513,17 +624,18 @@ public class MacroController {
         mc.options.keyUp.setDown(false);
         mc.options.keySprint.setDown(false);
         mc.options.keyJump.setDown(false);
-        stuckTicks = 0;
+        mc.options.keyDown.setDown(false);
+        wdCursor = null;
         return Follow.ARRIVED;
     }
 
-    /** Point LOOKAHEAD blocks further along the points from our projection onto the current segment. */
-    private static Vec3 carrot(Cursor c, Vec3 prev, Vec3 pos) {
+    /** Point {@code lookahead} blocks further along the points from our projection onto the current segment. */
+    private static Vec3 carrot(Cursor c, Vec3 prev, Vec3 pos, double lookahead) {
         int n = c.pts.size();
         Vec3 a = prev, b = c.pts.get(c.idx);
         double t = Math.max(0, Math.min(1, segmentT(a, b, pos)));
         Vec3 cur = a.add(b.subtract(a).scale(t));
-        double left = LOOKAHEAD;
+        double left = lookahead;
         int idx = c.idx;
         for (int k = 0; k < n; k++) {
             Vec3 target = c.pts.get(idx);
@@ -549,14 +661,16 @@ public class MacroController {
     }
 
     /**
-     * True only when a block in front blocks the feet and there is head room above it, i.e. a jump
-     * actually gets us up. Walking down a step or off a ledge never needs one.
+     * True only when a block in the walking direction blocks the feet and there is head room above it,
+     * i.e. a jump actually gets us up. Walking down a step or off a ledge never needs one.
      */
-    private static boolean needsStepUp(Minecraft mc, LocalPlayer p) {
-        double yaw = Math.toRadians(p.getYRot());
-        double fx = -Math.sin(yaw) * 0.7, fz = Math.cos(yaw) * 0.7;
-        BlockPos feet = BlockPos.containing(p.getX() + fx, p.getY() + 0.1, p.getZ() + fz);
-        return isSolid(mc, feet) && !isSolid(mc, feet.above()) && !isSolid(mc, feet.above(2));
+    private static boolean needsStepUp(Minecraft mc, LocalPlayer p, double dx, double dz) {
+        for (double dist : new double[]{0.5, 0.9}) {
+            BlockPos feet = BlockPos.containing(p.getX() + dx * dist, p.getY() + 0.1, p.getZ() + dz * dist);
+            if (isSolid(mc, feet) && !isSolid(mc, feet.above()) && !isSolid(mc, feet.above(2))
+                    && !isSolid(mc, p.blockPosition().above(2))) return true;
+        }
+        return false;
     }
 
     private static boolean isSolid(Minecraft mc, BlockPos pos) {
@@ -573,7 +687,7 @@ public class MacroController {
 
     private void releaseKeys(Minecraft mc) {
         for (KeyMapping k : new KeyMapping[]{mc.options.keyUp, mc.options.keySprint,
-                mc.options.keyJump, mc.options.keyAttack}) {
+                mc.options.keyJump, mc.options.keyAttack, mc.options.keyDown}) {
             k.setDown(false);
         }
     }

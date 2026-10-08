@@ -11,7 +11,12 @@ import net.minecraft.world.level.block.state.BlockState;
  * thread only ever reads this copy, never the live world.
  */
 public class WalkCache {
-    public static final byte UNKNOWN = 0, PASS = 1, SOLID = 2, FLUID = 3;
+    /**
+     * PASS = nothing to collide with; LOW = collision top at most 0.6 (slab, carpet, snow: walk onto it
+     * with auto-step, and stand on it); SOLID = normal block; TALL = collision above 1 (fence, wall:
+     * can't pass, can't stand on top); FLUID = water/lava (avoid).
+     */
+    public static final byte UNKNOWN = 0, PASS = 1, SOLID = 2, FLUID = 3, LOW = 4, TALL = 5;
     public static final int SX = 96, SY = 40, SZ = 96;
     public static final int N = SX * SY * SZ;
 
@@ -47,7 +52,8 @@ public class WalkCache {
         }
 
         public boolean passable(int x, int y, int z) {
-            return get(x, y, z) == PASS;
+            byte b = get(x, y, z);
+            return b == PASS || b == LOW;
         }
 
         /** Feet and head free. */
@@ -57,7 +63,11 @@ public class WalkCache {
 
         /** A player can stand with their feet in this block. */
         public boolean standable(int x, int y, int z) {
-            return get(x, y - 1, z) == SOLID && clear(x, y, z);
+            if (!clear(x, y, z)) return false;
+            byte below = get(x, y - 1, z);
+            if (below == SOLID || below == LOW) return true;
+            // feet cell is itself a slab/carpet sitting on something solid
+            return get(x, y, z) == LOW && below != PASS && below != UNKNOWN && below != FLUID;
         }
     }
 
@@ -116,7 +126,12 @@ public class WalkCache {
     private static byte classify(ClientLevel level, BlockPos pos) {
         BlockState st = level.getBlockState(pos);
         if (!st.getFluidState().isEmpty()) return FLUID;
-        return st.getCollisionShape(level, pos).isEmpty() ? PASS : SOLID;
+        var shape = st.getCollisionShape(level, pos);
+        if (shape.isEmpty()) return PASS;
+        double top = shape.max(net.minecraft.core.Direction.Axis.Y);
+        if (top <= 0.6) return LOW;
+        if (top > 1.0) return TALL;
+        return SOLID;
     }
 
     private static int[] buildOrder() {

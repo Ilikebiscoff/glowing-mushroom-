@@ -45,11 +45,12 @@ public class Planner {
     private final AtomicReference<Plan> result = new AtomicReference<>();
 
     /** Starts a plan in the background. Returns false (and does nothing) if one is already running. */
-    public boolean request(WalkCache.Grid grid, BlockPos start, List<BlockPos> mushrooms, Set<BlockPos> keep) {
+    public boolean request(WalkCache.Grid grid, BlockPos start, List<BlockPos> mushrooms, Set<BlockPos> keep,
+                           Set<BlockPos> avoid) {
         if (grid == null || !busy.compareAndSet(false, true)) return false;
         exec.execute(() -> {
             try {
-                result.set(compute(grid, start, mushrooms, keep));
+                result.set(compute(grid, start, mushrooms, keep, avoid));
             } catch (Throwable t) {
                 t.printStackTrace();
             } finally {
@@ -66,11 +67,15 @@ public class Planner {
 
     // ------------------------------------------------------------------------------------------
 
-    static Plan compute(WalkCache.Grid g, BlockPos start, List<BlockPos> mushrooms, Set<BlockPos> keep) {
+    /** Extra cost for cells where we recently got stuck, so the next path goes another way. */
+    private static final float AVOID_COST = 25f;
+
+    static Plan compute(WalkCache.Grid g, BlockPos start, List<BlockPos> mushrooms, Set<BlockPos> keep,
+                        Set<BlockPos> avoid) {
         List<Leg> legs = new ArrayList<>();
         int s = findStart(g, start);
         if (s < 0 || mushrooms.isEmpty()) return new Plan(legs);
-        Search first = dijkstra(g, s);
+        Search first = dijkstra(g, s, avoid);
         Leg l1 = bestLeg(g, first, mushrooms, keep);
         if (l1 == null) return new Plan(legs);
         legs.add(l1);
@@ -79,7 +84,7 @@ public class Planner {
         rest.removeAll(l1.targets());
         if (!rest.isEmpty()) {
             int s2 = g.index(l1.stand().getX(), l1.stand().getY(), l1.stand().getZ());
-            Leg l2 = bestLeg(g, dijkstra(g, s2), rest, Set.of());
+            Leg l2 = bestLeg(g, dijkstra(g, s2, avoid), rest, Set.of());
             if (l2 != null) legs.add(l2);
         }
         return new Plan(legs);
@@ -100,7 +105,7 @@ public class Planner {
     record Search(float[] dist, int[] parent, int start) {}
 
     /** Dijkstra over standable cells: walk, diagonal (no corner cutting), step up 1, drop up to 3. */
-    static Search dijkstra(WalkCache.Grid g, int start) {
+    static Search dijkstra(WalkCache.Grid g, int start, Set<BlockPos> avoid) {
         float[] dist = new float[WalkCache.N];
         int[] parent = new int[WalkCache.N];
         Arrays.fill(dist, Float.POSITIVE_INFINITY);
@@ -123,14 +128,14 @@ public class Planner {
                     float base = diag ? 1.414f : 1f;
                     if (diag && !(g.clear(x + dx, y, z) && g.clear(x, y, z + dz))) continue;
                     if (g.standable(nx, y, nz)) {
-                        relax(g, dist, parent, pq, idx, nx, y, nz, cost + base);
+                        relax(g, avoid, dist, parent, pq, idx, nx, y, nz, cost + base);
                     } else if (!diag) {
                         if (g.standable(nx, y + 1, nz) && g.passable(x, y + 2, z)) {
-                            relax(g, dist, parent, pq, idx, nx, y + 1, nz, cost + base + 0.8f);
+                            relax(g, avoid, dist, parent, pq, idx, nx, y + 1, nz, cost + base + 0.8f);
                         } else if (g.clear(nx, y, nz)) {
                             for (int d = 1; d <= 3; d++) {
                                 if (g.standable(nx, y - d, nz)) {
-                                    relax(g, dist, parent, pq, idx, nx, y - d, nz, cost + base + 0.3f * d);
+                                    relax(g, avoid, dist, parent, pq, idx, nx, y - d, nz, cost + base + 0.3f * d);
                                     break;
                                 }
                                 if (!g.passable(nx, y - d, nz)) break;
@@ -142,8 +147,9 @@ public class Planner {
         return new Search(dist, parent, start);
     }
 
-    private static void relax(WalkCache.Grid g, float[] dist, int[] parent, PriorityQueue<Long> pq,
-                              int from, int x, int y, int z, float c) {
+    private static void relax(WalkCache.Grid g, Set<BlockPos> avoid, float[] dist, int[] parent,
+                              PriorityQueue<Long> pq, int from, int x, int y, int z, float c) {
+        if (!avoid.isEmpty() && avoid.contains(new BlockPos(x, y, z))) c += AVOID_COST;
         if (c > COST_LIMIT) return;
         int i = g.index(x, y, z);
         if (i < 0 || c >= dist[i]) return;
@@ -260,6 +266,29 @@ public class Planner {
             i = j;
         }
         return out;
+    }
+
+    /**
+     * True if a player can walk in a straight line from {@code a} to {@code b} on one level: every
+     * cell under the line (and 0.3 to either side) is standable at a's feet height.
+     */
+    public static boolean walkable(WalkCache.Grid g, Vec3 a, Vec3 b) {
+        if (g == null) return false;
+        int y = (int) Math.floor(a.y + 0.01);
+        if (Math.abs(Math.floor(b.y + 0.01) - y) > 0) return false;
+        double dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
+        if (len < 1e-6) return true;
+        double px = -dz / len, pz = dx / len;
+        int steps = (int) Math.ceil(len / 0.25);
+        for (int s = 0; s <= steps; s++) {
+            double t = (double) s / steps;
+            for (double off : new double[]{-0.3, 0, 0.3}) {
+                int cx = (int) Math.floor(a.x + dx * t + px * off);
+                int cz = (int) Math.floor(a.z + dz * t + pz * off);
+                if (!g.standable(cx, y, cz)) return false;
+            }
+        }
+        return true;
     }
 
     private static Vec3 center(WalkCache.Grid g, int i) {

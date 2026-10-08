@@ -33,3 +33,9 @@ thread groups them, finds the standing spot that has the most of them in nuker r
 `mushrooms / (walk cost + 6)`, so a big group a bit further away beats a single one next to you. The next
 group is planned while walking to the current one. With nothing known it walks the recorded route as a
 patrol. Cyan line/box = current plan. `/glowing mode route` = old route-only behaviour.
+
+## Getting unstuck
+Jumps where the planned path steps up (and when a block in the walking direction really needs climbing).
+If it stops making progress toward the next path point for ~1.25 s it backs off with a hop and re-plans
+around that spot. If it hasn't really moved for 6 s while trying to walk, it runs `/warp glowing`, waits 3 s
+and carries on (at most once every 20 s).
