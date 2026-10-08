@@ -22,21 +22,6 @@ jobs:
           gradle-version: 9.4.0
       - name: Build
         run: gradle build --no-daemon -Pmod_version=2.1.${{ github.run_number }}
-      - name: Inspect API (temporary)
-        continue-on-error: true
-        shell: bash {0}
-        run: |
-          RJ=$(find ~/.gradle -name 'fabric-rendering-v1-*.jar' | head -1)
-          MJ=$(find . -path '*loom-cache*' -name 'minecraft-merged-*.jar' | head -1)
-          echo "MJ=$MJ RJ=$RJ"
-          unzip -l "$RJ" | awk '{print $4}' | grep -i 'hud' | head -20
-          for c in $(unzip -l "$RJ" | awk '{print $4}' | grep -E 'api/.*hud/.*\.class$' | sed 's/\.class//; s#/#.#g'); do javap -public -cp "$RJ:$MJ" "$c"; done
-          javap -public -cp "$MJ" net.minecraft.client.multiplayer.MultiPlayerGameMode | grep -iE 'destroy|class'
-          unzip -l "$MJ" | awk '{print $4}' | grep -E '^net/minecraft/client/gui/Gui[A-Za-z]*\.class$|^net/minecraft/resources/(Identifier|ResourceLocation)\.class$'
-          for c in net.minecraft.client.gui.GuiGraphics net.minecraft.client.gui.GuiGraphicsExtractor; do javap -public -cp "$MJ" "$c" 2>/dev/null | grep -E 'class|fill\(|drawString|text\(|String' | head -30; done
-          javap -public -cp "$MJ" net.minecraft.world.entity.Entity | grep -iE 'isInWater|isInLiquid|isInLava'
-          javap -public -cp "$MJ" net.minecraft.client.multiplayer.ClientPacketListener | grep -iE 'sendCommand|sendChat'
-          javap -public -cp "$MJ" net.minecraft.client.DeltaTracker | head -5
       - name: Upload jar artifact
         uses: actions/upload-artifact@v4
         with:

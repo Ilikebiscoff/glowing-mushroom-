@@ -39,3 +39,9 @@ Jumps where the planned path steps up (and when a block in the walking direction
 If it stops making progress toward the next path point for ~1.25 s it backs off with a hop and re-plans
 around that spot. If it hasn't really moved for 6 s while trying to walk, it runs `/warp glowing`, waits 3 s
 and carries on (at most once every 20 s).
+
+## Profit tracker
+Dark panel in the top left: macro time, Glowing Mushrooms (+2 per broken glowing mushroom), regular
+mushrooms (+1 per broken non-glowing red/brown mushroom), coins at live Bazaar instant-sell prices (refreshed
+every 5 min), total and coins/hour. A break is counted once the block stays gone for 0.4 s (server confirmed).
+`/glowing hud` toggles it, `/glowing reset` zeroes it. Falling in water also triggers `/warp glowing`.

@@ -9,7 +9,9 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import com.glowingmushroom.pathing.Planner;
 import com.glowingmushroom.pathing.WalkCache;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.minecraft.client.Minecraft;
+import net.minecraft.resources.Identifier;
 import net.minecraft.gizmos.GizmoStyle;
 import net.minecraft.gizmos.Gizmos;
 import net.minecraft.gizmos.TextGizmo;
@@ -34,7 +36,11 @@ public class GlowingMushroomMod implements ClientModInitializer {
             MushroomTracker.tick(mc);
             cache.tick(mc);
             controller.tick(mc);
+            ProfitTracker.tick(mc, controller.isRunning());
         });
+
+        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("glowingmushroomauto", "profit"),
+                (graphics, delta) -> ProfitHud.render(graphics, delta, controller::isRunning));
 
         LevelRenderEvents.BEFORE_GIZMOS.register(context -> {
             controller.frame(Minecraft.getInstance());
@@ -140,6 +146,16 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 Chat.msg("Mushroom highlight " + (highlight ? "ON" : "OFF"));
                 return 1;
             }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("hud").executes(c -> {
+                ProfitHud.enabled = !ProfitHud.enabled;
+                Chat.msg("Profit HUD " + (ProfitHud.enabled ? "ON" : "OFF"));
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("reset").executes(c -> {
+                ProfitTracker.reset();
+                Chat.msg("Profit tracker reset.");
+                return 1;
+            }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("help").executes(c -> {
                 help();
                 return 1;
@@ -163,6 +179,8 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing mode path|route - pathfind to mushroom groups (default) or only walk the route");
         Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
         Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
+        Chat.msg(" /glowing hud - toggle the profit panel (top left)");
+        Chat.msg(" /glowing reset - reset profit, counts and time");
         Chat.msg(" /glowing particle [ids|reset|potion] - show/set the marker particle");
         Chat.msg(" /glowing scan - run twice near mushrooms to list particle types");
         Chat.msg(" /glowing speed - show the speed read from the tab list");

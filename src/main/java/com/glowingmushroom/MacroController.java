@@ -46,6 +46,8 @@ public class MacroController {
     private static final long WARP_AFTER_MS = 6000;
     private static final long WARP_COOLDOWN_MS = 20_000;
     private static final long WARP_PAUSE_MS = 3000;
+    /** Water check runs every tick, so it gets its own (shorter) cooldown. */
+    private static final long WATER_WARP_COOLDOWN_MS = 8000;
     private static final long AVOID_MS = 30_000;
     /** Camera turn speed cap while walking, deg/s. */
     private static final float WALK_TURN_SPEED = 240f;
@@ -180,6 +182,10 @@ public class MacroController {
             anchor = null;
             return;
         }
+        if (p.isInWater() && now - lastWarp > WATER_WARP_COOLDOWN_MS) {
+            doWarp(mc, p, now, "In water");
+            return;
+        }
         moving = false;
         tickInner(mc, p, now);
         warpCheck(mc, p, now);
@@ -194,8 +200,13 @@ public class MacroController {
             return;
         }
         if (now - anchorTime < WARP_AFTER_MS || now - lastWarp < WARP_COOLDOWN_MS) return;
+        doWarp(mc, p, now, "Stuck for 6s");
+    }
+
+    /** Runs /warp glowing, pauses while the teleport happens and forgets the old plan. */
+    private void doWarp(Minecraft mc, LocalPlayer p, long now, String why) {
         lastWarp = now;
-        Chat.msg("Stuck for 6s - /warp glowing");
+        Chat.msg(why + " - /warp glowing");
         releaseKeys(mc);
         p.connection.sendCommand("warp glowing");
         warpPauseUntil = now + WARP_PAUSE_MS;
@@ -272,6 +283,7 @@ public class MacroController {
             Long last = nukeAttempts.get(bp);
             if (last != null && now - last < NUKE_RETRY_MS) continue;
             nukeAttempts.put(bp, now);
+            ProfitTracker.onBreakAttempt(bp);
             mc.gameMode.startDestroyBlock(bp, Direction.UP);
             if (!swung) {
                 p.swing(InteractionHand.MAIN_HAND);
