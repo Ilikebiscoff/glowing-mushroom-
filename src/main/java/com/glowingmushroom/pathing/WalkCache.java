@@ -116,6 +116,15 @@ public class WalkCache {
             return false;
         }
 
+        /** A fence / wall / gate sits right next to this cell (at feet or head level). */
+        public boolean tallNear(int x, int y, int z) {
+            int[][] n = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (int[] d : n) {
+                if (get(x + d[0], y, z + d[1]) == TALL || get(x + d[0], y + 1, z + d[1]) == TALL) return true;
+            }
+            return false;
+        }
+
         /** Feet and head free. */
         public boolean clear(int x, int y, int z) {
             return passable(x, y, z) && passable(x, y + 1, z);

@@ -71,3 +71,10 @@ Commands are sent at most every 8-10 s; after 6 failed tries it waits a minute. 
   point. Overlay: yellow box = jump, orange = drop, magenta = gap jump.
 - If a block on the next few path cells changes it re-plans immediately.
 - `/glowing parkour on` lets it sprint-jump over 1-block gaps (default off). `/glowing path` prints plan stats.
+
+## Stairs, slabs, fences
+- Camera no longer spins on a stair/slab node: when it is on a node it aims at the next node (or along the
+  path, or holds its heading). Step-up nodes count as reached on a stair's low half / slab height.
+- It only jumps for rises of at least 0.55 blocks (stairs/slabs auto-step), and never jumps at fences, walls or
+  gates (1.5 high): it re-plans around them. Stuck recovery also slides sideways toward the freer side.
+- Paths keep a block away from fence posts when they can.

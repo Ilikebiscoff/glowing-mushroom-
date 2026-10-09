@@ -109,6 +109,8 @@ public class MacroController {
     private boolean moving;
     private Vec3 anchor;
     private long anchorTime, lastWarp, warpPauseUntil;
+    private int strafeDir;
+    private float recoverYaw;
     private BlockPos goalStand;
     private long goalSince, noMushSince;
     private int pulse;
@@ -603,16 +605,22 @@ public class MacroController {
         int n = c.pts.size();
         Vec3 pos = p.position();
 
-        if (recoverTicks > 0) { // back off and hop after getting stuck
+        if (recoverTicks > 0) { // back off, slide sideways around whatever we hit, and hop
             recoverTicks--;
+            boolean phase = recoverTicks > 2; // first 4 ticks
             mc.options.keyUp.setDown(false);
             mc.options.keySprint.setDown(false);
-            mc.options.keyDown.setDown(recoverTicks > 0);
-            mc.options.keyJump.setDown(recoverTicks > 0 && p.onGround());
+            mc.options.keyDown.setDown(phase);
+            mc.options.keyRight.setDown(phase && strafeDir > 0);
+            mc.options.keyLeft.setDown(phase && strafeDir < 0);
+            mc.options.keyJump.setDown(phase && p.onGround());
+            aim.setTarget(recoverYaw, 6f, WALK_TURN_SPEED, 1.0f);
             moving = true;
             return Follow.MOVING;
         }
         mc.options.keyDown.setDown(false);
+        mc.options.keyLeft.setDown(false);
+        mc.options.keyRight.setDown(false);
 
         if (n == 0 || (!c.loop && c.idx >= n)) return arrive(mc);
 
@@ -627,9 +635,13 @@ public class MacroController {
         boolean gap = mv == Planner.Move.GAP;
         // planner paths tell us exactly where the jumps are; the patrol route falls back to heights
         boolean stepUp = mv == Planner.Move.STEP_UP || gap || (mv == null && wp.y - p.getY() >= 0.6);
-        // don't skip a step-up point early: we must actually climb it
-        if ((hDist(pos, wp) < arrive && !stepUp) || (hasPrev && !stepUp && segmentT(prev, wp, pos) >= 1.0)
-                || (stepUp && hDist(pos, wp) < 0.6 && p.getY() >= wp.y - 0.1)) {
+        // Step-up nodes (stairs, full blocks): the real surface can be up to half a block below the cell
+        // height (stair low half, slab), so accept 0.6 below, or just being on the node on the ground.
+        double hd0 = hDist(pos, wp);
+        boolean climbed = hd0 < 0.7 && p.getY() >= wp.y - 0.6;
+        boolean onNode = hd0 < 0.4 && p.onGround();
+        if ((hd0 < arrive && !stepUp) || (hasPrev && !stepUp && segmentT(prev, wp, pos) >= 1.0)
+                || (stepUp && (climbed || onNode))) {
             c.idx++;
             if (!c.loop && c.idx >= n) return arrive(mc);
             c.idx %= n;
@@ -650,10 +662,24 @@ public class MacroController {
         Vec3 carrot = hasPrev ? carrot(c, prev, pos, look) : wp;
         if (stepUp && toWp < 2.5) carrot = wp;
         else if (!c.loop && !Planner.walkable(cache.grid(), pos, carrot)) carrot = wp;
+        // Standing on a node (stairs, slabs): the direction to a point right under us flips wildly and
+        // the camera spins. Aim at the next node instead, or along the path, or just hold the heading.
+        boolean holdYaw = false;
+        if (toWp < 0.8) {
+            Vec3 nxt = (c.loop || c.idx + 1 < n) ? c.pts.get((c.idx + 1) % n) : null;
+            if (nxt != null && hDist(wp, nxt) > 0.3) {
+                carrot = nxt;
+            } else if (hasPrev && hDist(prev, wp) > 0.3) {
+                double len = hDist(prev, wp);
+                carrot = new Vec3(wp.x + (wp.x - prev.x) / len * 1.5, wp.y, wp.z + (wp.z - prev.z) / len * 1.5);
+            } else {
+                holdYaw = true;
+            }
+        }
         float[] ang = anglesTo(p, new Vec3(carrot.x, p.getEyeY(), carrot.z));
-        float yawErr = net.minecraft.util.Mth.wrapDegrees(ang[0] - p.getYRot());
+        float yawErr = holdYaw ? 0f : net.minecraft.util.Mth.wrapDegrees(ang[0] - p.getYRot());
         // dead zone: ignore tiny heading errors so it doesn't hunt left/right on a straight line
-        float targetYaw = Math.abs(yawErr) < 2.0f && !stepUp ? p.getYRot() : ang[0];
+        float targetYaw = holdYaw || (Math.abs(yawErr) < 2.0f && !stepUp) ? p.getYRot() : ang[0];
         aim.setTarget(targetYaw, 6f, WALK_TURN_SPEED, 1.0f); // a little downward, like a person walking
 
         float headingErr = Math.abs(yawErr);
@@ -670,7 +696,7 @@ public class MacroController {
         boolean jump = false;
         if (p.onGround()) {
             if (gap) jump = toWp < 2.3 + speed; // sprint-jump off the lip of a one block gap
-            else if (stepUp && toWp < Math.max(1.3, speed * 3)) jump = true;
+            else if (stepUp && toWp < Math.max(1.3, speed * 3) && wp.y - p.getY() >= 0.55) jump = true;
             else if (p.horizontalCollision) {
                 double dx, dz;
                 if (speed > 0.05) {
@@ -681,7 +707,14 @@ public class MacroController {
                     dx = (wp.x - pos.x) / d;
                     dz = (wp.z - pos.z) / d;
                 }
-                jump = needsStepUp(mc, p, dx, dz);
+                int ob = obstacle(mc, p, dx, dz);
+                jump = ob == 1;
+                if (ob == 2) { // fence / wall / gate: can't be jumped, re-plan around it right now
+                    long nowMs = System.currentTimeMillis();
+                    avoid.put(BlockPos.containing(wp.x, wp.y, wp.z), nowMs);
+                    planDirty = true;
+                    lastPlanRequest = 0;
+                }
             }
         }
         mc.options.keyJump.setDown(jump);
@@ -692,8 +725,8 @@ public class MacroController {
             wdIdx = c.idx;
             wdBest = toWp;
             wdTicks = 0;
-        } else if (toWp < wdBest - 0.3) {
-            wdBest = toWp;
+        } else if (toWp < wdBest - 0.3 || toWp < 0.4) {
+            wdBest = Math.min(wdBest, toWp);
             wdTicks = 0;
         } else if (headingErr < 75f && ++wdTicks > 25) {
             wdTicks = 0;
@@ -706,6 +739,8 @@ public class MacroController {
                     avoid.put(here.offset(ax, 0, az), now);
                 }
             avoid.put(there, now);
+            strafeDir = pickStrafe(p);
+            recoverYaw = p.getYRot() + strafeDir * 20f;
             recoverTicks = 6;
             moving = true;
             return Follow.STUCK;
@@ -767,16 +802,38 @@ public class MacroController {
     }
 
     /**
-     * True only when a block in the walking direction blocks the feet and there is head room above it,
-     * i.e. a jump actually gets us up. Walking down a step or off a ledge never needs one.
+     * What stands in the walking direction at foot height: 0 = nothing, 1 = a step that a jump gets us
+     * over (collision top <= 1 block and head room above), 2 = something too tall to jump (fence, wall,
+     * gate: collision 1.5). Walking down a step or off a ledge never needs a jump.
      */
-    private static boolean needsStepUp(Minecraft mc, LocalPlayer p, double dx, double dz) {
+    private int obstacle(Minecraft mc, LocalPlayer p, double dx, double dz) {
         for (double dist : new double[]{0.5, 0.9}) {
             BlockPos feet = BlockPos.containing(p.getX() + dx * dist, p.getY() + 0.1, p.getZ() + dz * dist);
-            if (isSolid(mc, feet) && !isSolid(mc, feet.above()) && !isSolid(mc, feet.above(2))
-                    && !isSolid(mc, p.blockPosition().above(2))) return true;
+            var shape = mc.level.getBlockState(feet).getCollisionShape(mc.level, feet);
+            if (shape.isEmpty()) continue;
+            if (shape.max(net.minecraft.core.Direction.Axis.Y) > 1.01) {
+                avoid.put(feet, System.currentTimeMillis());
+                return 2;
+            }
+            if (!isSolid(mc, feet.above()) && !isSolid(mc, feet.above(2))
+                    && !isSolid(mc, p.blockPosition().above(2))) return 1;
         }
-        return false;
+        return 0;
+    }
+
+    /** Which way (1 = right, -1 = left) there is more room to slide around an obstacle. */
+    private int pickStrafe(LocalPlayer p) {
+        var g = cache.grid();
+        double yaw = Math.toRadians(p.getYRot());
+        double rx = -Math.cos(yaw), rz = -Math.sin(yaw);
+        if (g != null) {
+            int y = p.blockPosition().getY();
+            boolean r = g.standable((int) Math.floor(p.getX() + rx), y, (int) Math.floor(p.getZ() + rz));
+            boolean l = g.standable((int) Math.floor(p.getX() - rx), y, (int) Math.floor(p.getZ() - rz));
+            if (r && !l) return 1;
+            if (l && !r) return -1;
+        }
+        return rand.nextBoolean() ? 1 : -1;
     }
 
     private static boolean isSolid(Minecraft mc, BlockPos pos) {
@@ -793,7 +850,8 @@ public class MacroController {
 
     private void releaseKeys(Minecraft mc) {
         for (KeyMapping k : new KeyMapping[]{mc.options.keyUp, mc.options.keySprint,
-                mc.options.keyJump, mc.options.keyAttack, mc.options.keyDown}) {
+                mc.options.keyJump, mc.options.keyAttack, mc.options.keyDown,
+                mc.options.keyLeft, mc.options.keyRight}) {
             k.setDown(false);
         }
     }

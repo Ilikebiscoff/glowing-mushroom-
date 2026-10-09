@@ -84,6 +84,8 @@ public class Planner {
     /** Walking right next to a drop. */
     private static final float EDGE_COST = 1.0f;
     private static final float SLOW_COST = 2.0f;
+    /** Cells next to fences/walls: the follower sways a little, so keep a block away when possible. */
+    private static final float TALL_COST = 0.8f;
     private static final float WATER_COST = 1.5f;
     private static final float GAP_COST = 4.0f;
 
@@ -213,6 +215,7 @@ public class Planner {
         if (!avoid.isEmpty() && avoid.contains(new BlockPos(x, y, z))) c += AVOID_COST;
         if (g.edge(x, y, z)) c += EDGE_COST;
         if (g.slow(x, y, z)) c += SLOW_COST;
+        if (g.tallNear(x, y, z)) c += TALL_COST;
         if (g.waterNear(x, y, z)) c += WATER_COST;
         if (c > COST_LIMIT) return;
         int i = g.index(x, y, z);
@@ -394,6 +397,7 @@ public class Planner {
                 int cz = (int) Math.floor(az + dz * t + pz * off);
                 if (!seen.add(((long) cx << 32) ^ (cz & 0xFFFFFFFFL))) continue;
                 if (!g.standable(cx, y, cz)) return false;
+                if (g.tallNear(cx, y, cz)) return false; // keep corners at cell centres next to fences
             }
         }
         return true;
