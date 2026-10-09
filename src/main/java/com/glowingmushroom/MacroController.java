@@ -503,6 +503,9 @@ public class MacroController {
     }
 
     private long validateAt;
+    private Cursor spinCursor;
+    private int spinIdx;
+    private float spinAccum, spinLastYaw;
 
     /**
      * Looks at the next few path cells in the live block cache: if one stopped being standable (block
@@ -635,13 +638,28 @@ public class MacroController {
         boolean gap = mv == Planner.Move.GAP;
         // planner paths tell us exactly where the jumps are; the patrol route falls back to heights
         boolean stepUp = mv == Planner.Move.STEP_UP || gap || (mv == null && wp.y - p.getY() >= 0.6);
-        // Step-up nodes (stairs, full blocks): the real surface can be up to half a block below the cell
-        // height (stair low half, slab), so accept 0.6 below, or just being on the node on the ground.
-        double hd0 = hDist(pos, wp);
-        boolean climbed = hd0 < 0.7 && p.getY() >= wp.y - 0.6;
-        boolean onNode = hd0 < 0.4 && p.onGround();
-        if ((hd0 < arrive && !stepUp) || (hasPrev && !stepUp && segmentT(prev, wp, pos) >= 1.0)
-                || (stepUp && (climbed || onNode))) {
+        // Advance past every node we have reached or already flown past. At 400 speed we cover ~1 block
+        // per tick, so on stairs we can skip right over a step node; if that node stayed our target it
+        // ended up behind us, we turned around for it, overshot again and ran in circles.
+        for (int guard = 0; guard < 6; guard++) {
+            double hd0 = hDist(pos, wp);
+            boolean passed = hasPrev && segmentT(prev, wp, pos) >= 1.0;
+            boolean reached;
+            if (stepUp) {
+                // the real surface can be up to half a block below the cell height (slab, stair low half)
+                boolean climbed = hd0 < 0.9 && p.getY() >= wp.y - 0.6;
+                boolean onNode = hd0 < 0.4 && p.onGround();
+                boolean overIt = passed && p.getY() >= wp.y - 0.6; // flew over it, on top of the step
+                reached = climbed || onNode || overIt;
+                if (passed && !reached && p.getY() < wp.y - 1.1 && p.onGround()) {
+                    // beside/past the step but a whole block too low: we are not on this staircase
+                    planDirty = true;
+                    lastPlanRequest = 0;
+                }
+            } else {
+                reached = hd0 < arrive || passed;
+            }
+            if (!reached) break;
             c.idx++;
             if (!c.loop && c.idx >= n) return arrive(mc);
             c.idx %= n;
@@ -652,6 +670,7 @@ public class MacroController {
             mv = c.moveAt(c.idx);
             gap = mv == Planner.Move.GAP;
             stepUp = mv == Planner.Move.STEP_UP || gap || (mv == null && wp.y - p.getY() >= 0.6);
+            arrive = last ? Math.max(0.6, speed * 2.5) : Math.max(ARRIVE_DIST, speed * 4);
         }
         double toWp = hDist(pos, wp);
 
@@ -718,6 +737,31 @@ public class MacroController {
             }
         }
         mc.options.keyJump.setDown(jump);
+
+        // anti-spin: more than 1.5 turns of camera rotation without reaching the node = something is wrong
+        // with this node; avoid it and re-plan instead of circling forever
+        float yawNow = p.getYRot();
+        if (c != spinCursor || c.idx != spinIdx) {
+            spinCursor = c;
+            spinIdx = c.idx;
+            spinAccum = 0f;
+        } else {
+            spinAccum += Math.abs(net.minecraft.util.Mth.wrapDegrees(yawNow - spinLastYaw));
+            if (spinAccum > 540f) {
+                spinAccum = 0f;
+                long nowMs = System.currentTimeMillis();
+                avoid.put(BlockPos.containing(wp.x, wp.y, wp.z), nowMs);
+                avoid.put(p.blockPosition(), nowMs);
+                planDirty = true;
+                lastPlanRequest = 0;
+                legStuck++;
+                if (leg != null && c == legCursor && legStuck >= 3) { // keeps happening: give up on this group
+                    for (BlockPos t : leg.targets()) blacklist.put(t, nowMs);
+                    leg = null;
+                }
+            }
+        }
+        spinLastYaw = yawNow;
 
         // progress watchdog: must get 0.3 blocks closer to the current point within 25 ticks
         if (c != wdCursor || c.idx != wdIdx) {
