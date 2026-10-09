@@ -67,10 +67,6 @@ public class MacroController {
     private final Route route;
     private final WalkCache cache;
     private final Planner planner = new Planner();
-    private final IslandScanner scanner = new IslandScanner();
-    /** Every this often: forget blacklists and rescan the whole island (0 = off). */
-    public volatile long refreshMs = 5 * 60_000L;
-    private long nextRefresh;
     private final HumanAim aim = new HumanAim();
 
     /** A list of points being walked, with progress. */
@@ -179,7 +175,6 @@ public class MacroController {
         wdCursor = null;
         anchor = null;
         warpPauseUntil = 0;
-        nextRefresh = System.currentTimeMillis() + 3000; // first island scan shortly after start
         stuckTicks = 0;
         phase = Phase.NONE;
         aim.reset();
@@ -256,34 +251,9 @@ public class MacroController {
         planDirty = true;
     }
 
-    /**
-     * Forget everything we were ignoring (blacklist, avoided spots, "not glowing" marks) and rescan every
-     * loaded chunk for mushroom plants, so nothing stays ignored forever and the far side of the island
-     * is known too. Runs on a timer and via /glowing rescan.
-     */
-    public void refresh(Minecraft mc) {
-        blacklist.clear();
-        avoid.clear();
-        MushroomTracker.clearIgnored();
-        scanner.begin(mc);
-        planDirty = true;
-        lastPlanRequest = 0;
-        nextRefresh = System.currentTimeMillis() + (refreshMs > 0 ? refreshMs : Long.MAX_VALUE / 4);
-        Chat.msg("Refreshing: scanning the island for mushrooms...");
-    }
-
     private void tickInner(Minecraft mc, LocalPlayer p, long now) {
         blacklist.values().removeIf(t -> now - t > BLACKLIST_MS);
         avoid.values().removeIf(t -> now - t > AVOID_MS);
-
-        if (refreshMs > 0 && now >= nextRefresh) refresh(mc);
-        int found = scanner.tick(mc);
-        if (found >= 0) {
-            Chat.msg("Island scan done: " + found + " mushroom plants in " + scanner.chunksScanned()
-                    + " chunks (" + MushroomTracker.CANDIDATES.size() + " unconfirmed).");
-            planDirty = true;
-            lastPlanRequest = 0;
-        }
 
         if (handleSpeedBoost(mc, p, now)) {
             mc.options.keyAttack.setDown(false);
@@ -334,7 +304,7 @@ public class MacroController {
         Vec3 eyes = p.getEyePosition();
         boolean swung = false;
         for (BlockPos bp : MushroomTracker.MUSHROOMS.keySet()) {
-            if (blacklist.containsKey(bp) || !MushroomTracker.confirmed(bp)) continue;
+            if (blacklist.containsKey(bp)) continue;
             if (eyes.distanceToSqr(bp.getCenter()) > NUKE_REACH * NUKE_REACH) continue;
             Long first = nukeFirst.get(bp);
             if (first == null) nukeFirst.put(bp, now);
@@ -516,7 +486,7 @@ public class MacroController {
         Follow r = follow(mc, p, legCursor);
         if (r == Follow.ARRIVED) {
             if (arrivedAt == 0) arrivedAt = now;
-            else if (now - arrivedAt > (allConfirmed(leg) ? 1500 : 4500)) { // standing here but they won't break
+            else if (now - arrivedAt > 1500) { // standing here but they won't break
                 for (BlockPos t : leg.targets()) blacklist.put(t, now);
                 leg = null;
                 planDirty = true;
@@ -556,8 +526,7 @@ public class MacroController {
         List<BlockPos> ms = new ArrayList<>();
         for (BlockPos m : MushroomTracker.snapshot()) if (!blacklist.containsKey(m)) ms.add(m);
         Set<BlockPos> keep = leg == null ? Set.of() : new HashSet<>(leg.targets());
-        if (planner.request(cache.grid(), p.blockPosition(), ms, keep, new HashSet<>(avoid.keySet()),
-                new HashSet<>(MushroomTracker.CANDIDATES))) {
+        if (planner.request(cache.grid(), p.blockPosition(), ms, keep, new HashSet<>(avoid.keySet()))) {
             lastPlanRequest = now;
             planDirty = false;
         }
@@ -593,11 +562,6 @@ public class MacroController {
         arrivedAt = 0;
         legStuck = 0;
         stuckTicks = 0;
-    }
-
-    private static boolean allConfirmed(Planner.Leg l) {
-        for (BlockPos t : l.targets()) if (!MushroomTracker.confirmed(t)) return false;
-        return true;
     }
 
     /** Some of the leg's mushrooms are still there to break. */

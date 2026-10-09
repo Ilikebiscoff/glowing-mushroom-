@@ -56,11 +56,11 @@ public class Planner {
 
     /** Starts a plan in the background. Returns false (and does nothing) if one is already running. */
     public boolean request(WalkCache.Grid grid, BlockPos start, List<BlockPos> mushrooms, Set<BlockPos> keep,
-                           Set<BlockPos> avoid, Set<BlockPos> weak) {
+                           Set<BlockPos> avoid) {
         if (grid == null || !busy.compareAndSet(false, true)) return false;
         exec.execute(() -> {
             try {
-                result.set(compute(grid, start, mushrooms, keep, avoid, weak));
+                result.set(compute(grid, start, mushrooms, keep, avoid));
             } catch (Throwable t) {
                 t.printStackTrace();
             } finally {
@@ -87,11 +87,8 @@ public class Planner {
     private static final float WATER_COST = 1.5f;
     private static final float GAP_COST = 4.0f;
 
-    /** An unconfirmed (island-scan) mushroom is worth this much of a confirmed glowing one. */
-    private static final double WEAK_WEIGHT = 0.35;
-
     static Plan compute(WalkCache.Grid g, BlockPos start, List<BlockPos> mushrooms, Set<BlockPos> keep,
-                        Set<BlockPos> avoid, Set<BlockPos> weak) {
+                        Set<BlockPos> avoid) {
         long t0 = System.nanoTime();
         List<Leg> legs = new ArrayList<>();
         int s = findStart(g, start);
@@ -101,7 +98,7 @@ public class Planner {
         }
         Search first = dijkstra(g, s, avoid);
         int expanded = first.expansions();
-        Leg l1 = bestLeg(g, first, mushrooms, keep, weak);
+        Leg l1 = bestLeg(g, first, mushrooms, keep);
         if (l1 == null) {
             lastStats = "no reachable mushroom (" + mushrooms.size() + " known, " + expanded + " nodes)";
             return new Plan(legs);
@@ -115,7 +112,7 @@ public class Planner {
             int s2 = g.index(l1.stand().getX(), l1.stand().getY(), l1.stand().getZ());
             Search second = dijkstra(g, s2, avoid);
             expanded += second.expansions();
-            Leg l2 = bestLeg(g, second, rest, Set.of(), weak);
+            Leg l2 = bestLeg(g, second, rest, Set.of());
             if (l2 != null) legs.add(l2);
         }
         long ms = (System.nanoTime() - t0) / 1_000_000;
@@ -257,8 +254,7 @@ public class Planner {
     }
 
     /** Best standing spot over all clusters, scored by mushrooms covered per walking cost. */
-    private static Leg bestLeg(WalkCache.Grid g, Search s, List<BlockPos> mushrooms, Collection<BlockPos> keep,
-                               Set<BlockPos> weak) {
+    private static Leg bestLeg(WalkCache.Grid g, Search s, List<BlockPos> mushrooms, Collection<BlockPos> keep) {
         double r2 = REACH * REACH;
         int bestIdx = -1;
         double bestScore = 0, bestCost = 0;
@@ -274,8 +270,7 @@ public class Planner {
             boolean kept = false;
             for (BlockPos m : c) if (keep.contains(m)) { kept = true; break; }
 
-            int cIdx = -1;
-            double cCover = 0;
+            int cIdx = -1, cCover = 0;
             float cCost = Float.POSITIVE_INFINITY;
             for (int x = minX - 5; x <= maxX + 5; x++)
                 for (int y = minY - 4; y <= maxY + 3; y++)
@@ -285,10 +280,10 @@ public class Planner {
                         if (g.waterNear(x, y, z)) continue; // don't end up in the water while mining
                         float eff = s.dist[i] + (g.edge(x, y, z) ? 2f : 0f); // prefer not on a ledge
                         double ex = x + 0.5, ey = y + EYE, ez = z + 0.5;
-                        double cover = 0;
+                        int cover = 0;
                         for (BlockPos m : c) {
                             double ddx = m.getX() + 0.5 - ex, ddy = m.getY() + 0.5 - ey, ddz = m.getZ() + 0.5 - ez;
-                            if (ddx * ddx + ddy * ddy + ddz * ddz <= r2) cover += weak.contains(m) ? WEAK_WEIGHT : 1.0;
+                            if (ddx * ddx + ddy * ddy + ddz * ddz <= r2) cover++;
                         }
                         if (cover > cCover || (cover == cCover && cover > 0 && eff < cCost)) {
                             cCover = cover;
@@ -296,7 +291,7 @@ public class Planner {
                             cIdx = i;
                         }
                     }
-            if (cIdx < 0 || cCover <= 0) continue;
+            if (cIdx < 0 || cCover == 0) continue;
             double score = cCover / (cCost + 6.0) * (kept ? KEEP_BONUS : 1.0);
             if (score > bestScore) {
                 bestScore = score;
