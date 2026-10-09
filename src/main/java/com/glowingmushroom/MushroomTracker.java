@@ -38,7 +38,13 @@ public class MushroomTracker {
     private static final double SEE_RANGE = 24;
     private static final java.util.concurrent.atomic.AtomicInteger VERSION = new java.util.concurrent.atomic.AtomicInteger();
 
-    /** Mushroom plants found by scanning the island that no glow particle confirmed yet. */
+    /** Every spot where a glow particle ever confirmed a glowing mushroom (they respawn in place). */
+    private static final Set<BlockPos> EVER_GLOWING = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static java.nio.file.Path historyFile;
+    private static volatile boolean historyDirty;
+    private static long lastHistorySave;
+
+    /** Remembered spots that are not confirmed right now: candidates until a particle shows up. */
     public static final Set<BlockPos> CANDIDATES = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Candidates we got close to that did not glow (ignored until the next refresh). */
     private static final Set<BlockPos> NOT_GLOWING = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -68,12 +74,18 @@ public class MushroomTracker {
             if (hit != null) {
                 boolean fresh = MUSHROOMS.put(hit, System.currentTimeMillis()) == null;
                 boolean wasCandidate = CANDIDATES.remove(hit); // a glow particle confirms it
+                if (EVER_GLOWING.add(hit.immutable())) historyDirty = true;
                 CAND_NEAR.remove(hit);
                 NOT_GLOWING.remove(hit);
                 if (fresh || wasCandidate) VERSION.incrementAndGet();
             }
         }
         long now = System.currentTimeMillis();
+        if (historyDirty && now - lastHistorySave > 15_000) {
+            historyDirty = false;
+            lastHistorySave = now;
+            saveHistory();
+        }
         for (Iterator<Map.Entry<BlockPos, Long>> it = MUSHROOMS.entrySet().iterator(); it.hasNext(); ) {
             var en = it.next();
             BlockPos bp = en.getKey();
@@ -115,7 +127,53 @@ public class MushroomTracker {
         return MUSHROOMS.containsKey(bp) && !CANDIDATES.contains(bp);
     }
 
-    /** Adds a mushroom plant found by the island scan as an unconfirmed candidate. */
+    /** Loads the remembered glowing spots from disk. */
+    public static void initHistory(java.nio.file.Path file) {
+        historyFile = file;
+        try {
+            if (java.nio.file.Files.exists(file)) {
+                try (var r = java.nio.file.Files.newBufferedReader(file)) {
+                    int[][] arr = new com.google.gson.Gson().fromJson(r, int[][].class);
+                    if (arr != null) for (int[] a : arr) if (a.length == 3) EVER_GLOWING.add(new BlockPos(a[0], a[1], a[2]));
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void saveHistory() {
+        if (historyFile == null) return;
+        try {
+            java.nio.file.Files.createDirectories(historyFile.getParent());
+            int[][] arr = EVER_GLOWING.stream().map(b -> new int[]{b.getX(), b.getY(), b.getZ()}).toArray(int[][]::new);
+            try (var w = java.nio.file.Files.newBufferedWriter(historyFile)) {
+                new com.google.gson.Gson().toJson(arr, w);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static int historySize() {
+        return EVER_GLOWING.size();
+    }
+
+    /** Re-adds every remembered glowing spot that currently holds a mushroom as an unconfirmed candidate. */
+    public static int restoreHistory(ClientLevel level) {
+        if (level == null) return 0;
+        int n = 0;
+        for (BlockPos bp : EVER_GLOWING) {
+            if (!level.isLoaded(bp) || !isMushroom(level.getBlockState(bp).getBlock())) continue;
+            if (!MUSHROOMS.containsKey(bp) && !NOT_GLOWING.contains(bp)) {
+                addCandidate(bp);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** Adds a remembered glowing spot as an unconfirmed candidate (confirmed again by its particle). */
     public static void addCandidate(BlockPos bp) {
         if (MUSHROOMS.containsKey(bp) || NOT_GLOWING.contains(bp)) return;
         BlockPos im = bp.immutable();

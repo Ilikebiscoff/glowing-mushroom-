@@ -73,9 +73,11 @@ Commands are sent at most every 8-10 s; after 6 failed tries it waits a minute. 
 - `/glowing parkour on` lets it sprint-jump over 1-block gaps (default off). `/glowing path` prints plan stats.
 
 ## Island refresh (every 5 min)
-Every 5 minutes (and 3 s after `/glowing start`, or on `/glowing rescan`) the macro forgets everything it was
-ignoring (blacklist, avoided spots, "not glowing" marks) and scans every loaded chunk for small red/brown
-mushroom plants. Those are **candidates**: worth 35% of a confirmed one when planning, never nuked until a
-glow particle confirms them, and dropped if we stand within 18 blocks for 3 s and they don't glow.
-So mushrooms on the far side of the island get visited instead of being forgotten.
+Glowing mushrooms respawn in the same places, so every spot where a glow particle ever confirmed one is
+remembered (saved in `config/glowingmushroom_spots.json`, survives restarts). Every 5 minutes (and 3 s
+after `/glowing start`, or on `/glowing rescan`) the macro forgets everything it was ignoring (blacklist,
+avoided spots, "not glowing" marks) and re-adds all remembered spots that hold a mushroom again. Those
+come back as unconfirmed candidates: worth 35% of a confirmed one when planning, never nuked until a glow
+particle confirms them, and dropped if we stand within 18 blocks for 3 s and they don't glow (the plant
+hasn't respawned as a glowing one yet). Plain red/brown mushrooms are never targeted.
 `/glowing refresh <minutes>` changes the interval (0 = off).

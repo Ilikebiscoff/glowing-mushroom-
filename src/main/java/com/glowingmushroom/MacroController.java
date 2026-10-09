@@ -67,8 +67,7 @@ public class MacroController {
     private final Route route;
     private final WalkCache cache;
     private final Planner planner = new Planner();
-    private final IslandScanner scanner = new IslandScanner();
-    /** Every this often: forget blacklists and rescan the whole island (0 = off). */
+    /** Every this often: forget blacklists and re-check every remembered glowing spot (0 = off). */
     public volatile long refreshMs = 5 * 60_000L;
     private long nextRefresh;
     private final HumanAim aim = new HumanAim();
@@ -257,19 +256,21 @@ public class MacroController {
     }
 
     /**
-     * Forget everything we were ignoring (blacklist, avoided spots, "not glowing" marks) and rescan every
-     * loaded chunk for mushroom plants, so nothing stays ignored forever and the far side of the island
-     * is known too. Runs on a timer and via /glowing rescan.
+     * Forget everything we were ignoring (blacklist, avoided spots, "not glowing" marks) and put every spot
+     * where a glowing mushroom was ever confirmed back on the list (they respawn in place), so nothing
+     * stays ignored forever and the far side of the island gets visited. Runs on a timer and via
+     * /glowing rescan. Only spots that glowed before are used - plain mushrooms are never targeted.
      */
     public void refresh(Minecraft mc) {
         blacklist.clear();
         avoid.clear();
         MushroomTracker.clearIgnored();
-        scanner.begin(mc);
+        int n = MushroomTracker.restoreHistory(mc.level);
         planDirty = true;
         lastPlanRequest = 0;
         nextRefresh = System.currentTimeMillis() + (refreshMs > 0 ? refreshMs : Long.MAX_VALUE / 4);
-        Chat.msg("Refreshing: scanning the island for mushrooms...");
+        Chat.msg("Refresh: " + n + " remembered glowing spots re-added (" + MushroomTracker.historySize()
+                + " known in total).");
     }
 
     private void tickInner(Minecraft mc, LocalPlayer p, long now) {
@@ -277,14 +278,6 @@ public class MacroController {
         avoid.values().removeIf(t -> now - t > AVOID_MS);
 
         if (refreshMs > 0 && now >= nextRefresh) refresh(mc);
-        int found = scanner.tick(mc);
-        if (found >= 0) {
-            Chat.msg("Island scan done: " + found + " mushroom plants in " + scanner.chunksScanned()
-                    + " chunks (" + MushroomTracker.CANDIDATES.size() + " unconfirmed).");
-            planDirty = true;
-            lastPlanRequest = 0;
-        }
-
         if (handleSpeedBoost(mc, p, now)) {
             mc.options.keyAttack.setDown(false);
             navigate(mc, p, now);
