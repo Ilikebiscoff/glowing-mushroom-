@@ -32,7 +32,6 @@ public class GlowingMushroomMod implements ClientModInitializer {
     public void onInitializeClient() {
         route = new Route(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_route.json"));
         controller = new MacroController(route, cache);
-        MushroomTracker.initHistory(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_spots.json"));
         failsafe = new Failsafe(controller);
 
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.JOIN.register(
@@ -263,7 +262,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
         Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
         Chat.msg(" /glowing nomush <seconds> - /warp glowing if there is nothing to reach that long (default 3, 0 = off)");
-        Chat.msg(" /glowing rescan - forget ignored mushrooms and re-add every remembered glowing spot now");
+        Chat.msg(" /glowing rescan - forget ignored mushrooms and rescan the whole island now");
         Chat.msg(" /glowing refresh <minutes> - automatic rescan interval (default 5, 0 = off)");
         Chat.msg(" /glowing path - stats of the last path plan (nodes, ms, jumps)");
         Chat.msg(" /glowing parkour on|off - allow sprint-jumping over 1-block gaps (default off)");
