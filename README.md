@@ -62,3 +62,12 @@ Commands are sent at most every 8-10 s; after 6 failed tries it waits a minute. 
 - `/warp glowing` when: it stays within 3.5 blocks for 6 s while trying to walk, it chases the same stand spot
   for 25 s, it's in water, or **there is no mushroom it can reach for 3 s** (`/glowing nomush <seconds>`, 0 = off).
   After a warp it resumes after ~1.2 s.
+
+## Pathfinding v3
+- **Stairs are full blocks** (you jump onto them, can't walk through); slabs/carpets/snow stay walkable.
+- Avoids cells touching lava, fire, cactus, magma, berry bushes, campfires, powder snow; cobweb / soul sand /
+  honey / mud cost extra; stays off water edges and ledges when it can (also for the stand spot).
+- Paths carry the move type of each node (walk / jump / drop / gap), so jumps happen at the exact takeoff
+  point. Overlay: yellow box = jump, orange = drop, magenta = gap jump.
+- If a block on the next few path cells changes it re-plans immediately.
+- `/glowing parkour on` lets it sprint-jump over 1-block gaps (default off). `/glowing path` prints plan stats.

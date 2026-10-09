@@ -3,6 +3,7 @@ package com.glowingmushroom.pathing;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -16,7 +17,9 @@ public class WalkCache {
      * with auto-step, and stand on it); SOLID = normal block; TALL = collision above 1 (fence, wall:
      * can't pass, can't stand on top); FLUID = water/lava (avoid).
      */
-    public static final byte UNKNOWN = 0, PASS = 1, SOLID = 2, FLUID = 3, LOW = 4, TALL = 5, STAIR = 6;
+    public static final byte UNKNOWN = 0, PASS = 1, SOLID = 2, FLUID = 3, LOW = 4, TALL = 5;
+    /** Per-cell flags (second array next to the class): damage / slowdown sources. */
+    public static final byte HAZARD = 1, SLOW = 2;
     public static final int SX = 96, SY = 40, SZ = 96;
     public static final int N = SX * SY * SZ;
 
@@ -29,6 +32,7 @@ public class WalkCache {
     public static final class Grid {
         public final int ox, oy, oz;
         final byte[] data = new byte[N];
+        final byte[] flags = new byte[N];
 
         Grid(int ox, int oy, int oz) {
             this.ox = ox;
@@ -53,18 +57,18 @@ public class WalkCache {
 
         public boolean passable(int x, int y, int z) {
             byte b = get(x, y, z);
-            return b == PASS || b == LOW || b == STAIR;
+            return b == PASS || b == LOW;
         }
 
-        /** Slab/carpet/stair: walkable without jumping. */
+        /** Slab/carpet/snow layer: walkable without jumping. (Stairs count as full blocks.) */
         public boolean gentle(int x, int y, int z) {
             byte b = get(x, y, z);
-            return b == LOW || b == STAIR;
+            return b == LOW;
         }
 
         private boolean floorAt(int x, int y, int z) {
             byte b = get(x, y, z);
-            return b == SOLID || b == LOW || b == STAIR || b == TALL;
+            return b == SOLID || b == LOW || b == TALL;
         }
 
         /**
@@ -81,6 +85,37 @@ public class WalkCache {
             return false;
         }
 
+        private boolean flag(int x, int y, int z, byte f) {
+            int i = index(x, y, z);
+            return i >= 0 && (flags[i] & f) != 0;
+        }
+
+        public boolean hazard(int x, int y, int z) {
+            return flag(x, y, z, HAZARD);
+        }
+
+        /** Standing here would touch lava/fire/cactus/magma/berries/campfire (cell, floor, head or neighbours). */
+        public boolean unsafe(int x, int y, int z) {
+            if (hazard(x, y, z) || hazard(x, y + 1, z) || hazard(x, y - 1, z)) return true;
+            return hazard(x + 1, y, z) || hazard(x - 1, y, z) || hazard(x, y, z + 1) || hazard(x, y, z - 1)
+                    || hazard(x + 1, y + 1, z) || hazard(x - 1, y + 1, z) || hazard(x, y + 1, z + 1)
+                    || hazard(x, y + 1, z - 1);
+        }
+
+        /** Cobweb / soul sand / honey / mud in the cell or as the floor. */
+        public boolean slow(int x, int y, int z) {
+            return flag(x, y, z, SLOW) || flag(x, y - 1, z, SLOW);
+        }
+
+        /** Any water/lava cell within one block (feet or head level, or just below). */
+        public boolean waterNear(int x, int y, int z) {
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dz = -1; dz <= 1; dz++)
+                    for (int dy = -1; dy <= 1; dy++)
+                        if (get(x + dx, y + dy, z + dz) == FLUID) return true;
+            return false;
+        }
+
         /** Feet and head free. */
         public boolean clear(int x, int y, int z) {
             return passable(x, y, z) && passable(x, y + 1, z);
@@ -90,8 +125,8 @@ public class WalkCache {
         public boolean standable(int x, int y, int z) {
             if (!clear(x, y, z)) return false;
             byte below = get(x, y - 1, z);
-            if (below == SOLID || below == LOW || below == STAIR) return true;
-            // feet cell is itself a slab/carpet/stair sitting on something solid
+            if (below == SOLID || below == LOW) return true;
+            // feet cell is itself a slab/carpet sitting on something solid
             return gentle(x, y, z) && below != PASS && below != UNKNOWN && below != FLUID;
         }
     }
@@ -126,7 +161,9 @@ public class WalkCache {
             int li = ORDER[cursor];
             cursor = cursor + 1 == ORDER.length ? 0 : cursor + 1;
             m.set(g.x(li), g.y(li), g.z(li));
-            g.data[li] = classify(level, m);
+            BlockState st = level.getBlockState(m);
+            g.data[li] = classify(level, m, st);
+            g.flags[li] = flagsOf(st);
         }
     }
 
@@ -140,7 +177,10 @@ public class WalkCache {
                 byte v = old.data[i];
                 if (v == UNKNOWN) continue;
                 int ni = g.index(old.x(i), old.y(i), old.z(i));
-                if (ni >= 0) g.data[ni] = v;
+                if (ni >= 0) {
+                    g.data[ni] = v;
+                    g.flags[ni] = old.flags[i];
+                }
             }
         }
         cursor = 0;
@@ -148,13 +188,22 @@ public class WalkCache {
         return g;
     }
 
-    private static byte classify(ClientLevel level, BlockPos pos) {
-        BlockState st = level.getBlockState(pos);
+    private static byte flagsOf(BlockState st) {
+        var b = st.getBlock();
+        byte f = 0;
+        if (st.getFluidState().is(net.minecraft.tags.FluidTags.LAVA) || b == Blocks.FIRE || b == Blocks.SOUL_FIRE
+                || b == Blocks.MAGMA_BLOCK || b == Blocks.CACTUS || b == Blocks.SWEET_BERRY_BUSH
+                || b == Blocks.WITHER_ROSE || b == Blocks.CAMPFIRE || b == Blocks.SOUL_CAMPFIRE
+                || b == Blocks.POWDER_SNOW) f |= HAZARD;
+        if (b == Blocks.COBWEB || b == Blocks.SOUL_SAND || b == Blocks.HONEY_BLOCK || b == Blocks.MUD) f |= SLOW;
+        return f;
+    }
+
+    private static byte classify(ClientLevel level, BlockPos pos, BlockState st) {
         if (!st.getFluidState().isEmpty()) return FLUID;
         var shape = st.getCollisionShape(level, pos);
         if (shape.isEmpty()) return PASS;
         double top = shape.max(net.minecraft.core.Direction.Axis.Y);
-        if (st.getBlock() instanceof net.minecraft.world.level.block.StairBlock) return STAIR;
         if (top <= 0.6) return LOW;
         if (top > 1.0) return TALL;
         return SOLID;

@@ -180,6 +180,25 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 }
                 return 1;
             }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("parkour")
+                    .executes(c -> {
+                        Chat.msg("Gap jumps: " + (Planner.parkour ? "ON" : "OFF") + " (/glowing parkour on|off)");
+                        return 1;
+                    })
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("on").executes(c -> {
+                        Planner.parkour = true;
+                        Chat.msg("Gap jumps ON: the pathfinder may sprint-jump over 1-block gaps.");
+                        return 1;
+                    }))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("off").executes(c -> {
+                        Planner.parkour = false;
+                        Chat.msg("Gap jumps OFF.");
+                        return 1;
+                    })));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("path").executes(c -> {
+                Chat.msg("Last plan: " + Planner.lastStats);
+                return 1;
+            }));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("nomush")
                     .executes(c -> {
                         long ms = controller.noMushroomWarpMs;
@@ -227,6 +246,8 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
         Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
         Chat.msg(" /glowing nomush <seconds> - /warp glowing if there is nothing to reach that long (default 3, 0 = off)");
+        Chat.msg(" /glowing path - stats of the last path plan (nodes, ms, jumps)");
+        Chat.msg(" /glowing parkour on|off - allow sprint-jumping over 1-block gaps (default off)");
         Chat.msg(" /glowing hud - toggle the profit panel (top left)");
         Chat.msg(" /glowing failsafe - toggle auto reconnect / rejoin SkyBlock / warp back");
         Chat.msg(" /glowing zone [text] - sidebar text that means you're in the cave");
@@ -270,6 +291,18 @@ public class GlowingMushroomMod implements ClientModInitializer {
         var pts = leg.path();
         for (int i = 0; i + 1 < pts.size(); i++)
             Gizmos.line(pts.get(i).add(0, 0.1, 0), pts.get(i + 1).add(0, 0.1, 0), CYAN, 3f).setAlwaysOnTop();
+        var mv = leg.moves();
+        for (int i = 0; i < pts.size() && i < mv.size(); i++) {
+            if (mv.get(i) == Planner.Move.WALK) continue;
+            int col = switch (mv.get(i)) {
+                case STEP_UP -> 0xFFFFE030;
+                case DROP -> 0xFFFF9A30;
+                default -> 0xFFFF40FF; // GAP
+            };
+            var v = pts.get(i);
+            Gizmos.cuboid(new AABB(v.x - 0.2, v.y, v.z - 0.2, v.x + 0.2, v.y + 0.4, v.z + 0.2),
+                    GizmoStyle.stroke(col, 2.5f)).setAlwaysOnTop();
+        }
         var st = leg.stand();
         Gizmos.cuboid(new AABB(st.getX() + 0.2, st.getY(), st.getZ() + 0.2, st.getX() + 0.8, st.getY() + 0.1, st.getZ() + 0.8),
                 GizmoStyle.strokeAndFill(CYAN, 2f, CYAN_FILL)).setAlwaysOnTop();

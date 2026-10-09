@@ -72,12 +72,22 @@ public class MacroController {
     /** A list of points being walked, with progress. */
     private static final class Cursor {
         final List<Vec3> pts;
+        final List<Planner.Move> moves; // null for the patrol route
         final boolean loop;
         int idx;
 
         Cursor(List<Vec3> pts, boolean loop) {
+            this(pts, null, loop);
+        }
+
+        Cursor(List<Vec3> pts, List<Planner.Move> moves, boolean loop) {
             this.pts = pts;
+            this.moves = moves;
             this.loop = loop;
+        }
+
+        Planner.Move moveAt(int i) {
+            return moves == null || i < 0 || i >= moves.size() ? null : moves.get(i);
         }
     }
 
@@ -472,6 +482,7 @@ public class MacroController {
         noMushSince = 0;
         routeCursor = null; // re-pick the nearest waypoint next time we patrol
 
+        validateLeg(p, now);
         Follow r = follow(mc, p, legCursor);
         if (r == Follow.ARRIVED) {
             if (arrivedAt == 0) arrivedAt = now;
@@ -486,6 +497,28 @@ public class MacroController {
                 leg = null;
             }
             planDirty = true;
+        }
+    }
+
+    private long validateAt;
+
+    /**
+     * Looks at the next few path cells in the live block cache: if one stopped being standable (block
+     * placed/broken, terrain changed) re-plan right now instead of walking into it.
+     */
+    private void validateLeg(LocalPlayer p, long now) {
+        var g = cache.grid();
+        if (g == null || leg == null || legCursor == null || now - validateAt < 150) return;
+        validateAt = now;
+        List<Vec3> pts = leg.path();
+        for (int k = legCursor.idx; k < Math.min(pts.size(), legCursor.idx + 6); k++) {
+            Vec3 v = pts.get(k);
+            int x = (int) Math.floor(v.x), y = (int) Math.floor(v.y + 0.01), z = (int) Math.floor(v.z);
+            if (g.get(x, y, z) != WalkCache.UNKNOWN && !g.standable(x, y, z)) {
+                planDirty = true;
+                lastPlanRequest = 0; // bypass the request throttle
+                return;
+            }
         }
     }
 
@@ -513,7 +546,7 @@ public class MacroController {
     }
 
     private void beginLeg(Planner.Leg l, LocalPlayer p) {
-        legCursor = new Cursor(l.path(), false);
+        legCursor = new Cursor(l.path(), l.moves(), false);
         // continue from the path point nearest to us
         List<Vec3> pts = l.path();
         int best = 0;
@@ -590,7 +623,10 @@ public class MacroController {
         double speed = Math.hypot(p.getDeltaMovement().x, p.getDeltaMovement().z); // blocks per tick
         boolean last = !c.loop && c.idx == n - 1;
         double arrive = last ? Math.max(0.6, speed * 2.5) : Math.max(ARRIVE_DIST, speed * 4);
-        boolean stepUp = wp.y - p.getY() >= 0.6;
+        Planner.Move mv = c.moveAt(c.idx);
+        boolean gap = mv == Planner.Move.GAP;
+        // planner paths tell us exactly where the jumps are; the patrol route falls back to heights
+        boolean stepUp = mv == Planner.Move.STEP_UP || gap || (mv == null && wp.y - p.getY() >= 0.6);
         // don't skip a step-up point early: we must actually climb it
         if ((hDist(pos, wp) < arrive && !stepUp) || (hasPrev && !stepUp && segmentT(prev, wp, pos) >= 1.0)
                 || (stepUp && hDist(pos, wp) < 0.6 && p.getY() >= wp.y - 0.1)) {
@@ -601,7 +637,9 @@ public class MacroController {
             hasPrev = c.loop ? n > 1 : c.idx > 0;
             prev = hasPrev ? c.pts.get((c.idx - 1 + n) % n) : pos;
             last = !c.loop && c.idx == n - 1;
-            stepUp = wp.y - p.getY() >= 0.6;
+            mv = c.moveAt(c.idx);
+            gap = mv == Planner.Move.GAP;
+            stepUp = mv == Planner.Move.STEP_UP || gap || (mv == null && wp.y - p.getY() >= 0.6);
         }
         double toWp = hDist(pos, wp);
 
@@ -620,7 +658,7 @@ public class MacroController {
 
         float headingErr = Math.abs(yawErr);
         boolean coast = last && toWp < speed * 3 + 0.3; // let it roll to a stop on the stand spot
-        boolean careful = (last && toWp < 2.5) || (stepUp && toWp < Math.max(2.5, speed * 8));
+        boolean careful = (last && toWp < 2.5) || (stepUp && !gap && toWp < Math.max(2.5, speed * 8));
         // ledges: no sprint and pulse the forward key (2 of 3 ticks) so it creeps instead of sliding off
         boolean edgy = nearEdge(p);
         boolean fwd = headingErr < 75f && !coast;
@@ -631,7 +669,8 @@ public class MacroController {
         // jump where the path climbs, or when a block in our way really needs climbing
         boolean jump = false;
         if (p.onGround()) {
-            if (stepUp && toWp < Math.max(1.3, speed * 3)) jump = true;
+            if (gap) jump = toWp < 2.3 + speed; // sprint-jump off the lip of a one block gap
+            else if (stepUp && toWp < Math.max(1.3, speed * 3)) jump = true;
             else if (p.horizontalCollision) {
                 double dx, dz;
                 if (speed > 0.05) {
