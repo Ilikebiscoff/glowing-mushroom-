@@ -102,8 +102,8 @@ public class MacroController {
     private BlockPos goalStand;
     private long goalSince, noMushSince;
     private int pulse;
-    /** No known mushroom for this long -> /warp glowing (0 = off). */
-    public volatile long noMushroomWarpMs = 12_000;
+    /** No mushroom to walk to / break for this long -> /warp glowing (0 = off). */
+    public volatile long noMushroomWarpMs = 3_000;
     private final Random rand = new Random();
     private final Map<BlockPos, Long> blacklist = new HashMap<>();
 
@@ -456,10 +456,11 @@ public class MacroController {
         }
 
         if (leg == null) {
-            if (noMushroomWarpMs > 0 && !anyKnown()) {
+            // nothing to walk to or break (nothing known, or all of it unreachable) for N seconds
+            if (noMushroomWarpMs > 0) {
                 if (noMushSince == 0) noMushSince = now;
                 else if (now - noMushSince >= noMushroomWarpMs && now - lastWarp >= WARP_COOLDOWN_MS) {
-                    doWarp(mc, p, now, "No mushrooms found");
+                    doWarp(mc, p, now, "No mushrooms to reach");
                     return;
                 }
             } else {
@@ -486,12 +487,6 @@ public class MacroController {
             }
             planDirty = true;
         }
-    }
-
-    /** Some non-blacklisted mushroom is known. */
-    private boolean anyKnown() {
-        for (BlockPos m : MushroomTracker.MUSHROOMS.keySet()) if (!blacklist.containsKey(m)) return true;
-        return false;
     }
 
     private void requestPlan(LocalPlayer p, long now) {

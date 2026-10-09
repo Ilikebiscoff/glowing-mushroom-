@@ -183,14 +183,14 @@ public class GlowingMushroomMod implements ClientModInitializer {
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("nomush")
                     .executes(c -> {
                         long ms = controller.noMushroomWarpMs;
-                        Chat.msg("Warp when no mushrooms are known for: " + (ms <= 0 ? "off" : ms / 1000 + "s")
+                        Chat.msg("Warp when there are no reachable mushrooms for: " + (ms <= 0 ? "off" : ms / 1000 + "s")
                                 + " (/glowing nomush <seconds>, 0 = off)");
                         return 1;
                     })
                     .then(arg("seconds", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 600)).executes(c -> {
                         int sec = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(c, "seconds");
                         controller.noMushroomWarpMs = sec * 1000L;
-                        Chat.msg("Warp when no mushrooms are known for: " + (sec == 0 ? "off" : sec + "s"));
+                        Chat.msg("Warp when there are no reachable mushrooms for: " + (sec == 0 ? "off" : sec + "s"));
                         return 1;
                     })));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("hud").executes(c -> {
@@ -226,7 +226,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing mode path|route - pathfind to mushroom groups (default) or only walk the route");
         Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
         Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
-        Chat.msg(" /glowing nomush <seconds> - /warp glowing if no mushrooms are known that long (0 = off)");
+        Chat.msg(" /glowing nomush <seconds> - /warp glowing if there is nothing to reach that long (default 3, 0 = off)");
         Chat.msg(" /glowing hud - toggle the profit panel (top left)");
         Chat.msg(" /glowing failsafe - toggle auto reconnect / rejoin SkyBlock / warp back");
         Chat.msg(" /glowing zone [text] - sidebar text that means you're in the cave");
