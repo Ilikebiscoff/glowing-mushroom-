@@ -97,6 +97,8 @@ public class HumanAim {
             velPitch *= decay;
         } else {
             float w = omega * stiffness;
+            // walking (turn speed capped): critically/over-damped so it never overshoots and sways
+            float zeta = maxSpeed < 500f ? Math.max(this.zeta, 1.15f) : this.zeta;
             float wy = w, wp = w * 0.85f; // vertical is a bit lazier than horizontal
             velYaw += (wy * wy * errYaw - 2f * zeta * wy * velYaw) * dt;
             velPitch += (wp * wp * errPitch - 2f * zeta * wp * velPitch) * dt;

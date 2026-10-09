@@ -573,13 +573,19 @@ public class MacroController {
         double toWp = hDist(pos, wp);
 
         // steer: carrot ahead on the path, but face a step squarely and never aim through walls
-        Vec3 carrot = hasPrev ? carrot(c, prev, pos, c.loop ? LOOKAHEAD : LOOKAHEAD_PATH) : wp;
+        // look-ahead grows with speed (~10 ticks of travel): a short one makes the camera overcorrect
+        // and weave left/right when moving fast
+        double look = Math.max(LOOKAHEAD, 2.0 + speed * 10.0);
+        Vec3 carrot = hasPrev ? carrot(c, prev, pos, look) : wp;
         if (stepUp && toWp < 2.5) carrot = wp;
         else if (!c.loop && !Planner.walkable(cache.grid(), pos, carrot)) carrot = wp;
         float[] ang = anglesTo(p, new Vec3(carrot.x, p.getEyeY(), carrot.z));
-        aim.setTarget(ang[0], 6f, WALK_TURN_SPEED, 0.6f); // a little downward, like a person walking
+        float yawErr = net.minecraft.util.Mth.wrapDegrees(ang[0] - p.getYRot());
+        // dead zone: ignore tiny heading errors so it doesn't hunt left/right on a straight line
+        float targetYaw = Math.abs(yawErr) < 2.0f && !stepUp ? p.getYRot() : ang[0];
+        aim.setTarget(targetYaw, 6f, WALK_TURN_SPEED, 1.0f); // a little downward, like a person walking
 
-        float headingErr = Math.abs(net.minecraft.util.Mth.wrapDegrees(ang[0] - p.getYRot()));
+        float headingErr = Math.abs(yawErr);
         boolean coast = last && toWp < speed * 3 + 0.3; // let it roll to a stop on the stand spot
         boolean careful = (last && toWp < 2.5) || (stepUp && toWp < 2.5);
         mc.options.keyUp.setDown(headingErr < 75f && !coast);
