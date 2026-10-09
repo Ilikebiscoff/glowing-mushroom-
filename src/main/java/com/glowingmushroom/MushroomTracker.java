@@ -38,6 +38,15 @@ public class MushroomTracker {
     private static final double SEE_RANGE = 24;
     private static final java.util.concurrent.atomic.AtomicInteger VERSION = new java.util.concurrent.atomic.AtomicInteger();
 
+    /** Mushroom plants found by scanning the island that no glow particle confirmed yet. */
+    public static final Set<BlockPos> CANDIDATES = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Candidates we got close to that did not glow (ignored until the next refresh). */
+    private static final Set<BlockPos> NOT_GLOWING = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final Map<BlockPos, Long> CAND_NEAR = new HashMap<>();
+    /** Within this range a glowing mushroom's particle would certainly have reached us (server range ~32). */
+    private static final double CONFIRM_RANGE = 18;
+    private static final long CONFIRM_MS = 3000;
+
     /** Known mushrooms -> last time (ms) a particle confirmed them. */
     public static final Map<BlockPos, Long> MUSHROOMS = new ConcurrentHashMap<>();
 
@@ -56,7 +65,13 @@ public class MushroomTracker {
             if (scanning) SEEN.merge(name, 1, Integer::sum);
             if (!markers.contains(name)) continue;
             BlockPos hit = findMushroom(level, p.getX(), p.getY(), p.getZ());
-            if (hit != null && MUSHROOMS.put(hit, System.currentTimeMillis()) == null) VERSION.incrementAndGet();
+            if (hit != null) {
+                boolean fresh = MUSHROOMS.put(hit, System.currentTimeMillis()) == null;
+                boolean wasCandidate = CANDIDATES.remove(hit); // a glow particle confirms it
+                CAND_NEAR.remove(hit);
+                NOT_GLOWING.remove(hit);
+                if (fresh || wasCandidate) VERSION.incrementAndGet();
+            }
         }
         long now = System.currentTimeMillis();
         for (Iterator<Map.Entry<BlockPos, Long>> it = MUSHROOMS.entrySet().iterator(); it.hasNext(); ) {
@@ -67,11 +82,51 @@ public class MushroomTracker {
                 continue;
             }
             if (!level.isLoaded(bp)) continue; // out of loaded range: keep remembering it
+            if (CANDIDATES.contains(bp)) {
+                // unconfirmed: if we stand close for a few seconds and it never glows, it's a plain mushroom
+                boolean close = mc.player != null && mc.player.position().distanceToSqr(bp.getCenter()) < CONFIRM_RANGE * CONFIRM_RANGE;
+                if (!isMushroom(level.getBlockState(bp).getBlock())) {
+                    CANDIDATES.remove(bp);
+                    CAND_NEAR.remove(bp);
+                    it.remove();
+                } else if (!close) {
+                    CAND_NEAR.remove(bp);
+                } else {
+                    Long since = CAND_NEAR.putIfAbsent(bp, now);
+                    if (since != null && now - since > CONFIRM_MS) {
+                        CANDIDATES.remove(bp);
+                        CAND_NEAR.remove(bp);
+                        NOT_GLOWING.add(bp);
+                        it.remove();
+                        VERSION.incrementAndGet();
+                    }
+                }
+                continue;
+            }
             boolean near = mc.player != null && mc.player.position().distanceToSqr(bp.getCenter()) < SEE_RANGE * SEE_RANGE;
             if (!isMushroom(level.getBlockState(bp).getBlock()) || (near && now - en.getValue() > EXPIRE_MS)) {
                 it.remove();
             }
         }
+    }
+
+    /** True if a glow particle confirmed this mushroom (not just found by the block scan). */
+    public static boolean confirmed(BlockPos bp) {
+        return MUSHROOMS.containsKey(bp) && !CANDIDATES.contains(bp);
+    }
+
+    /** Adds a mushroom plant found by the island scan as an unconfirmed candidate. */
+    public static void addCandidate(BlockPos bp) {
+        if (MUSHROOMS.containsKey(bp) || NOT_GLOWING.contains(bp)) return;
+        BlockPos im = bp.immutable();
+        CANDIDATES.add(im);
+        MUSHROOMS.put(im, System.currentTimeMillis());
+        VERSION.incrementAndGet();
+    }
+
+    /** Called on every refresh: give previously ignored mushrooms another chance. */
+    public static void clearIgnored() {
+        NOT_GLOWING.clear();
     }
 
     /** Changes every time a new mushroom is discovered (planner re-plans on change). */

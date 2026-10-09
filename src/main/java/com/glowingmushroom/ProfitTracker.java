@@ -47,7 +47,7 @@ public final class ProfitTracker {
         if (level == null) return;
         Block b = level.getBlockState(pos).getBlock();
         if (!MushroomTracker.isMushroom(b)) return;
-        boolean glow = MushroomTracker.MUSHROOMS.containsKey(pos);
+        boolean glow = MushroomTracker.confirmed(pos);
         if (!glow && b != Blocks.RED_MUSHROOM && b != Blocks.BROWN_MUSHROOM) return; // giant-mushroom blocks
         PENDING.putIfAbsent(pos.immutable(), new Pending(System.currentTimeMillis(), glow, b));
     }

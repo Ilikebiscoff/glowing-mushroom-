@@ -180,6 +180,22 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 }
                 return 1;
             }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("rescan").executes(c -> {
+                controller.refresh(mc);
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("refresh")
+                    .executes(c -> {
+                        long ms = controller.refreshMs;
+                        Chat.msg("Island refresh every: " + (ms <= 0 ? "off" : ms / 60000.0 + " min") + " (/glowing refresh <minutes>, 0 = off)");
+                        return 1;
+                    })
+                    .then(arg("minutes", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 120)).executes(c -> {
+                        int min = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(c, "minutes");
+                        controller.refreshMs = min * 60_000L;
+                        Chat.msg("Island refresh every: " + (min == 0 ? "off" : min + " min"));
+                        return 1;
+                    })));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("parkour")
                     .executes(c -> {
                         Chat.msg("Gap jumps: " + (Planner.parkour ? "ON" : "OFF") + " (/glowing parkour on|off)");
@@ -246,6 +262,8 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing nuker - toggle nuker (break all in reach) / aimed mining");
         Chat.msg(" /glowing highlight - toggle mushroom highlight boxes");
         Chat.msg(" /glowing nomush <seconds> - /warp glowing if there is nothing to reach that long (default 3, 0 = off)");
+        Chat.msg(" /glowing rescan - forget ignored mushrooms and rescan the whole island now");
+        Chat.msg(" /glowing refresh <minutes> - automatic rescan interval (default 5, 0 = off)");
         Chat.msg(" /glowing path - stats of the last path plan (nodes, ms, jumps)");
         Chat.msg(" /glowing parkour on|off - allow sprint-jumping over 1-block gaps (default off)");
         Chat.msg(" /glowing hud - toggle the profit panel (top left)");
