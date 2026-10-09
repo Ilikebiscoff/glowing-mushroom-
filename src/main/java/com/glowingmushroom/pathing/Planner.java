@@ -69,6 +69,10 @@ public class Planner {
 
     /** Extra cost for cells where we recently got stuck, so the next path goes another way. */
     private static final float AVOID_COST = 25f;
+    /** A full-block step needs a jump (slow, fiddly at speed); slabs/stairs don't, so they win. */
+    private static final float JUMP_COST = 3.0f;
+    /** Walking right next to a drop. */
+    private static final float EDGE_COST = 1.0f;
 
     static Plan compute(WalkCache.Grid g, BlockPos start, List<BlockPos> mushrooms, Set<BlockPos> keep,
                         Set<BlockPos> avoid) {
@@ -131,7 +135,7 @@ public class Planner {
                         relax(g, avoid, dist, parent, pq, idx, nx, y, nz, cost + base);
                     } else if (!diag) {
                         if (g.standable(nx, y + 1, nz) && g.passable(x, y + 2, z)) {
-                            relax(g, avoid, dist, parent, pq, idx, nx, y + 1, nz, cost + base + 0.8f);
+                            relax(g, avoid, dist, parent, pq, idx, nx, y + 1, nz, cost + base + JUMP_COST);
                         } else if (g.clear(nx, y, nz)) {
                             for (int d = 1; d <= 3; d++) {
                                 if (g.standable(nx, y - d, nz)) {
@@ -150,6 +154,7 @@ public class Planner {
     private static void relax(WalkCache.Grid g, Set<BlockPos> avoid, float[] dist, int[] parent,
                               PriorityQueue<Long> pq, int from, int x, int y, int z, float c) {
         if (!avoid.isEmpty() && avoid.contains(new BlockPos(x, y, z))) c += AVOID_COST;
+        if (g.edge(x, y, z)) c += EDGE_COST;
         if (c > COST_LIMIT) return;
         int i = g.index(x, y, z);
         if (i < 0 || c >= dist[i]) return;

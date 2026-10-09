@@ -55,3 +55,10 @@ While the macro is meant to be running (`/glowing start` .. `/glowing stop`):
   (default `glowing`, change with `/glowing zone <text>`, check with `/glowing where`) and resumes.
 - **Died** -> `/warp glowing`. In water / stuck 6 s -> `/warp glowing` (as before).
 Commands are sent at most every 8-10 s; after 6 failed tries it waits a minute. The HUD status shows what it's doing.
+
+## Hills, stuck and warp rules (v2.1.25+)
+- Pathfinder prefers slab/stair routes (no jump) over 1-block jump staircases and avoids hugging ledges;
+  next to a drop it stops sprinting and creeps. It starts jumping earlier the faster you are.
+- `/warp glowing` when: it stays within 3.5 blocks for 6 s while trying to walk, it chases the same stand spot
+  for 25 s, it's in water, or **no mushrooms are known for 12 s** (`/glowing nomush <seconds>`, 0 = off).
+  After a warp it resumes after ~1.2 s.

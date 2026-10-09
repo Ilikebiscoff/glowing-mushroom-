@@ -45,7 +45,11 @@ public class MacroController {
     /** No real movement for this long while trying to walk -> /warp glowing. */
     private static final long WARP_AFTER_MS = 6000;
     private static final long WARP_COOLDOWN_MS = 20_000;
-    private static final long WARP_PAUSE_MS = 3000;
+    private static final long WARP_PAUSE_MS = 1200;
+    /** Inside this radius for WARP_AFTER_MS while trying to walk = stuck (covers sliding/hopping on hills). */
+    private static final double STUCK_RADIUS = 3.5;
+    /** Same goal for this long without arriving = unreachable. */
+    private static final long GOAL_TIMEOUT_MS = 25_000;
     /** Water check runs every tick, so it gets its own (shorter) cooldown. */
     private static final long WATER_WARP_COOLDOWN_MS = 8000;
     private static final long AVOID_MS = 30_000;
@@ -95,6 +99,11 @@ public class MacroController {
     private boolean moving;
     private Vec3 anchor;
     private long anchorTime, lastWarp, warpPauseUntil;
+    private BlockPos goalStand;
+    private long goalSince, noMushSince;
+    private int pulse;
+    /** No known mushroom for this long -> /warp glowing (0 = off). */
+    public volatile long noMushroomWarpMs = 12_000;
     private final Random rand = new Random();
     private final Map<BlockPos, Long> blacklist = new HashMap<>();
 
@@ -191,16 +200,27 @@ public class MacroController {
         warpCheck(mc, p, now);
     }
 
-    /** Warps out if we've been trying to walk for 6 s without getting anywhere. */
+    /**
+     * Warps out if we keep trying to walk but stay within {@link #STUCK_RADIUS} blocks for 6 s, or if we
+     * chase the same stand spot for 25 s without getting there.
+     */
     private void warpCheck(Minecraft mc, LocalPlayer p, long now) {
         Vec3 pos = p.position();
-        if (!moving || anchor == null || hDist(pos, anchor) > 1.5 || Math.abs(pos.y - anchor.y) > 1.5) {
+        if (!moving || anchor == null || hDist(pos, anchor) > STUCK_RADIUS || Math.abs(pos.y - anchor.y) > 4) {
             anchor = pos;
             anchorTime = now;
+        } else if (now - anchorTime >= WARP_AFTER_MS && now - lastWarp >= WARP_COOLDOWN_MS) {
+            doWarp(mc, p, now, "Stuck for 6s");
             return;
         }
-        if (now - anchorTime < WARP_AFTER_MS || now - lastWarp < WARP_COOLDOWN_MS) return;
-        doWarp(mc, p, now, "Stuck for 6s");
+
+        BlockPos stand = leg == null ? null : leg.stand();
+        if (!moving || stand == null || !stand.equals(goalStand)) {
+            goalStand = stand;
+            goalSince = now;
+        } else if (now - goalSince >= GOAL_TIMEOUT_MS && now - lastWarp >= WARP_COOLDOWN_MS) {
+            doWarp(mc, p, now, "Can't reach goal for 25s");
+        }
     }
 
     /** Runs /warp glowing, pauses while the teleport happens and forgets the old plan. */
@@ -216,6 +236,8 @@ public class MacroController {
         recoverTicks = 0;
         wdCursor = null;
         anchor = null;
+        goalStand = null;
+        noMushSince = 0;
         planDirty = true;
     }
 
@@ -434,9 +456,19 @@ public class MacroController {
         }
 
         if (leg == null) {
+            if (noMushroomWarpMs > 0 && !anyKnown()) {
+                if (noMushSince == 0) noMushSince = now;
+                else if (now - noMushSince >= noMushroomWarpMs && now - lastWarp >= WARP_COOLDOWN_MS) {
+                    doWarp(mc, p, now, "No mushrooms found");
+                    return;
+                }
+            } else {
+                noMushSince = 0;
+            }
             patrol(mc, p);
             return;
         }
+        noMushSince = 0;
         routeCursor = null; // re-pick the nearest waypoint next time we patrol
 
         Follow r = follow(mc, p, legCursor);
@@ -454,6 +486,12 @@ public class MacroController {
             }
             planDirty = true;
         }
+    }
+
+    /** Some non-blacklisted mushroom is known. */
+    private boolean anyKnown() {
+        for (BlockPos m : MushroomTracker.MUSHROOMS.keySet()) if (!blacklist.containsKey(m)) return true;
+        return false;
     }
 
     private void requestPlan(LocalPlayer p, long now) {
@@ -587,14 +625,18 @@ public class MacroController {
 
         float headingErr = Math.abs(yawErr);
         boolean coast = last && toWp < speed * 3 + 0.3; // let it roll to a stop on the stand spot
-        boolean careful = (last && toWp < 2.5) || (stepUp && toWp < 2.5);
-        mc.options.keyUp.setDown(headingErr < 75f && !coast);
-        mc.options.keySprint.setDown(headingErr < 35f && !careful);
+        boolean careful = (last && toWp < 2.5) || (stepUp && toWp < Math.max(2.5, speed * 8));
+        // ledges: no sprint and pulse the forward key (2 of 3 ticks) so it creeps instead of sliding off
+        boolean edgy = nearEdge(p);
+        boolean fwd = headingErr < 75f && !coast;
+        if (edgy && ++pulse % 3 == 0) fwd = false;
+        mc.options.keyUp.setDown(fwd);
+        mc.options.keySprint.setDown(headingErr < 35f && !careful && !edgy);
 
         // jump where the path climbs, or when a block in our way really needs climbing
         boolean jump = false;
         if (p.onGround()) {
-            if (stepUp && toWp < 1.3) jump = true;
+            if (stepUp && toWp < Math.max(1.3, speed * 3)) jump = true;
             else if (p.horizontalCollision) {
                 double dx, dz;
                 if (speed > 0.05) {
@@ -676,6 +718,18 @@ public class MacroController {
 
     private static double hDist(Vec3 a, Vec3 b) {
         return Math.hypot(a.x - b.x, a.z - b.z);
+    }
+
+    /** Standing at, or about to step onto, a ledge. */
+    private boolean nearEdge(LocalPlayer p) {
+        var g = cache.grid();
+        if (g == null) return false;
+        BlockPos b = p.blockPosition();
+        if (g.edge(b.getX(), b.getY(), b.getZ())) return true;
+        double yaw = Math.toRadians(p.getYRot());
+        int ax = (int) Math.floor(p.getX() - Math.sin(yaw) * 1.2);
+        int az = (int) Math.floor(p.getZ() + Math.cos(yaw) * 1.2);
+        return g.edge(ax, b.getY(), az);
     }
 
     /**

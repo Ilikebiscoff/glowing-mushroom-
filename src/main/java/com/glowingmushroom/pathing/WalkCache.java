@@ -16,7 +16,7 @@ public class WalkCache {
      * with auto-step, and stand on it); SOLID = normal block; TALL = collision above 1 (fence, wall:
      * can't pass, can't stand on top); FLUID = water/lava (avoid).
      */
-    public static final byte UNKNOWN = 0, PASS = 1, SOLID = 2, FLUID = 3, LOW = 4, TALL = 5;
+    public static final byte UNKNOWN = 0, PASS = 1, SOLID = 2, FLUID = 3, LOW = 4, TALL = 5, STAIR = 6;
     public static final int SX = 96, SY = 40, SZ = 96;
     public static final int N = SX * SY * SZ;
 
@@ -53,7 +53,32 @@ public class WalkCache {
 
         public boolean passable(int x, int y, int z) {
             byte b = get(x, y, z);
-            return b == PASS || b == LOW;
+            return b == PASS || b == LOW || b == STAIR;
+        }
+
+        /** Slab/carpet/stair: walkable without jumping. */
+        public boolean gentle(int x, int y, int z) {
+            byte b = get(x, y, z);
+            return b == LOW || b == STAIR;
+        }
+
+        private boolean floorAt(int x, int y, int z) {
+            byte b = get(x, y, z);
+            return b == SOLID || b == LOW || b == STAIR || b == TALL;
+        }
+
+        /**
+         * A ledge: some orthogonal neighbour at this level is open air with no floor within 2 blocks
+         * below it, so a slip would drop us.
+         */
+        public boolean edge(int x, int y, int z) {
+            int[][] n = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (int[] d : n) {
+                int nx = x + d[0], nz = z + d[1];
+                if (get(nx, y, nz) == UNKNOWN) continue;
+                if (passable(nx, y, nz) && !floorAt(nx, y - 1, nz) && !floorAt(nx, y - 2, nz)) return true;
+            }
+            return false;
         }
 
         /** Feet and head free. */
@@ -65,9 +90,9 @@ public class WalkCache {
         public boolean standable(int x, int y, int z) {
             if (!clear(x, y, z)) return false;
             byte below = get(x, y - 1, z);
-            if (below == SOLID || below == LOW) return true;
-            // feet cell is itself a slab/carpet sitting on something solid
-            return get(x, y, z) == LOW && below != PASS && below != UNKNOWN && below != FLUID;
+            if (below == SOLID || below == LOW || below == STAIR) return true;
+            // feet cell is itself a slab/carpet/stair sitting on something solid
+            return gentle(x, y, z) && below != PASS && below != UNKNOWN && below != FLUID;
         }
     }
 
@@ -129,6 +154,7 @@ public class WalkCache {
         var shape = st.getCollisionShape(level, pos);
         if (shape.isEmpty()) return PASS;
         double top = shape.max(net.minecraft.core.Direction.Axis.Y);
+        if (st.getBlock() instanceof net.minecraft.world.level.block.StairBlock) return STAIR;
         if (top <= 0.6) return LOW;
         if (top > 1.0) return TALL;
         return SOLID;
