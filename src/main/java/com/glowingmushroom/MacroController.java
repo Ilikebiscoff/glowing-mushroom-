@@ -301,28 +301,37 @@ public class MacroController {
         }
     }
 
-    /** Sends a break for every tracked mushroom within reach; the route keeps walking meanwhile. */
+    /**
+     * Breaks tracked mushrooms in reach while the route keeps walking: at most ONE block per tick (the
+     * nearest one that is due). Sending many break actions in the same tick leaves ghost blocks; this
+     * spaces them out one tick apart.
+     */
     private void nuke(Minecraft mc, LocalPlayer p, long now) {
         Vec3 eyes = p.getEyePosition();
-        boolean swung = false;
+        BlockPos pick = null;
+        double pickD = Double.MAX_VALUE;
         for (BlockPos bp : MushroomTracker.MUSHROOMS.keySet()) {
             if (blacklist.containsKey(bp)) continue;
-            if (eyes.distanceToSqr(bp.getCenter()) > NUKE_REACH * NUKE_REACH) continue;
+            double d = eyes.distanceToSqr(bp.getCenter());
+            if (d > NUKE_REACH * NUKE_REACH) continue;
             Long first = nukeFirst.get(bp);
-            if (first == null) nukeFirst.put(bp, now);
-            else if (now - first > MINE_TIMEOUT_MS) {
+            if (first != null && now - first > MINE_TIMEOUT_MS) { // tried for too long and it's still there
                 blacklist.put(bp, now);
                 continue;
             }
             Long last = nukeAttempts.get(bp);
-            if (last != null && now - last < NUKE_RETRY_MS) continue;
-            nukeAttempts.put(bp, now);
-            ProfitTracker.onBreakAttempt(bp);
-            mc.gameMode.startDestroyBlock(bp, Direction.UP);
-            if (!swung) {
-                p.swing(InteractionHand.MAIN_HAND);
-                swung = true;
+            if (last != null && now - last < NUKE_RETRY_MS) continue; // still waiting for the server
+            if (d < pickD) {
+                pickD = d;
+                pick = bp;
             }
+        }
+        if (pick != null) {
+            nukeFirst.putIfAbsent(pick, now); // the give-up timer starts at the first real attempt
+            nukeAttempts.put(pick, now);
+            ProfitTracker.onBreakAttempt(pick);
+            mc.gameMode.startDestroyBlock(pick, Direction.UP);
+            p.swing(InteractionHand.MAIN_HAND);
         }
         // count and forget the ones that are gone
         nukeFirst.keySet().removeIf(bp -> {

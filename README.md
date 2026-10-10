@@ -85,3 +85,6 @@ The tab list is only checked when you swap or join a lobby (about 2.5 s after jo
 `/glowing start` - never continuously. If a listed player is there, the macro stops and `/lobby`s out; the
 fail-safe then rejoins SkyBlock and warps back, and the new lobby is checked again. After 8 swaps in a row it
 stops and tells you. Names are matched against the player name (case-insensitive); nothing else is read.
+
+Nuker: at most one block is broken per tick (the nearest one in reach that is due), so a cluster is cleared one
+tick apart instead of all at once; this avoids ghost blocks. Retries for a block that is still there come every 250 ms.
