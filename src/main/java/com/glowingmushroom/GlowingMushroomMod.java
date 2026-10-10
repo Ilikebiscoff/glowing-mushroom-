@@ -199,6 +199,39 @@ public class GlowingMushroomMod implements ClientModInitializer {
                 Chat.msg("Last plan: " + Planner.lastStats);
                 return 1;
             }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("avoid")
+                    .executes(c -> {
+                        var l = failsafe.avoid.list();
+                        Chat.msg("Avoid list (" + l.size() + "): " + (l.isEmpty() ? "empty" : String.join(", ", l)));
+                        return 1;
+                    })
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("add")
+                            .then(arg("name", StringArgumentType.word()).executes(c -> {
+                                String n = StringArgumentType.getString(c, "name");
+                                Chat.msg(failsafe.avoid.add(n) ? "Added " + n + " to the avoid list." : n + " is already on the list.");
+                                return 1;
+                            })))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("remove")
+                            .then(arg("name", StringArgumentType.word()).executes(c -> {
+                                String n = StringArgumentType.getString(c, "name");
+                                Chat.msg(failsafe.avoid.remove(n) ? "Removed " + n + "." : n + " wasn't on the list.");
+                                return 1;
+                            })))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("list").executes(c -> {
+                        var l = failsafe.avoid.list();
+                        Chat.msg("Avoid list (" + l.size() + "): " + (l.isEmpty() ? "empty" : String.join(", ", l)));
+                        return 1;
+                    }))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("clear").executes(c -> {
+                        failsafe.avoid.clear();
+                        Chat.msg("Avoid list cleared.");
+                        return 1;
+                    }))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("check").executes(c -> {
+                        String who = failsafe.avoid.scan(mc);
+                        Chat.msg(who == null ? "Nobody from the list is in this lobby." : who + " is in this lobby.");
+                        return 1;
+                    })));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("nomush")
                     .executes(c -> {
                         long ms = controller.noMushroomWarpMs;
@@ -248,6 +281,7 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing nomush <seconds> - /warp glowing if there is nothing to reach that long (default 3, 0 = off)");
         Chat.msg(" /glowing path - stats of the last path plan (nodes, ms, jumps)");
         Chat.msg(" /glowing parkour on|off - allow sprint-jumping over 1-block gaps (default off)");
+        Chat.msg(" /glowing avoid add|remove <name>, list, clear, check - players to avoid sharing a lobby with");
         Chat.msg(" /glowing hud - toggle the profit panel (top left)");
         Chat.msg(" /glowing failsafe - toggle auto reconnect / rejoin SkyBlock / warp back");
         Chat.msg(" /glowing zone [text] - sidebar text that means you're in the cave");

@@ -78,3 +78,10 @@ Commands are sent at most every 8-10 s; after 6 failed tries it waits a minute. 
 - It only jumps for rises of at least 0.55 blocks (stairs/slabs auto-step), and never jumps at fences, walls or
   gates (1.5 high): it re-plans around them. Stuck recovery also slides sideways toward the freer side.
 - Paths keep a block away from fence posts when they can.
+
+## Avoid list (don't share a lobby with these players)
+`/glowing avoid add <name>` / `remove <name>` / `list` / `clear` / `check`. Saved in `config/glowingmushroom_avoid.json`.
+The tab list is only checked when you swap or join a lobby (about 2.5 s after joining) and when you press
+`/glowing start` - never continuously. If a listed player is there, the macro stops and `/lobby`s out; the
+fail-safe then rejoins SkyBlock and warps back, and the new lobby is checked again. After 8 swaps in a row it
+stops and tells you. Names are matched against the player name (case-insensitive); nothing else is read.

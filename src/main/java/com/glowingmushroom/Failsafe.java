@@ -53,8 +53,43 @@ public class Failsafe {
     private long lastCmd, wrongSince, inZoneSince, noSidebarSince, nextResume, forceWarpAt;
     private int cmdTries;
 
+    /** Players to avoid sharing a lobby with; checked on lobby swaps and before starting. */
+    public final AvoidList avoid = new AvoidList(
+            net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_avoid.json"));
+    private static final long JOIN_SCAN_DELAY_MS = 2500; // tab list fills in a moment after joining
+    private static final int MAX_LOBBY_HOPS = 8;
+    private long joinScanAt;
+    private int lobbyHops;
+    private boolean leavingLobby;
+
     public Failsafe(MacroController controller) {
         this.controller = controller;
+    }
+
+    /**
+     * Looks for a listed player in the tab list. If one is here, stops the macro and leaves for a new lobby
+     * (/lobby, then the normal fail-safe rejoins SkyBlock and warps back). Returns true if we are leaving.
+     */
+    private boolean leaveIfListed(Minecraft mc, long now) {
+        String who = avoid.scan(mc);
+        if (who == null) {
+            lobbyHops = 0;
+            leavingLobby = false;
+            return false;
+        }
+        if (controller.isRunning()) controller.stop(mc);
+        if (++lobbyHops > MAX_LOBBY_HOPS) {
+            wanted = false;
+            status = "Stopped: " + who + " keeps showing up";
+            Chat.msg(who + " is in the lobby again after " + MAX_LOBBY_HOPS + " swaps - stopped.");
+            return true;
+        }
+        leavingLobby = true;
+        status = who + " is here - changing lobby";
+        Chat.msg(who + " is in this lobby - changing lobby (" + lobbyHops + "/" + MAX_LOBBY_HOPS + ").");
+        mc.player.connection.sendCommand("lobby");
+        lastCmd = now;
+        return true;
     }
 
     public boolean wanted() {
@@ -67,6 +102,8 @@ public class Failsafe {
         cmdTries = 0;
         reconnects = 0;
         status = null;
+        lobbyHops = 0;
+        if (enabled && mc.player != null && leaveIfListed(mc, System.currentTimeMillis())) return;
         if (!enabled || inZone(mc) || sidebar(mc) == null) {
             if (controller.start(mc)) Chat.msg("Started (" + (controller.pathMode ? "path" : "route") + " mode).");
             else wanted = enabled; // the fail-safe will keep trying once things are in order
@@ -94,6 +131,7 @@ public class Failsafe {
         inZoneSince = 0;
         cmdTries = 0;
         lastCmd = joinedAt; // give the server a moment before sending commands
+        if (wanted && !avoid.isEmpty()) joinScanAt = joinedAt + JOIN_SCAN_DELAY_MS;
     }
 
     public void onDisconnect(Minecraft mc) {
@@ -120,6 +158,14 @@ public class Failsafe {
             return;
         }
         if (joinedAt != 0 && now - joinedAt > 30_000) reconnects = 0;
+
+        if (joinScanAt != 0 && now >= joinScanAt) { // just swapped lobby: look at who is here
+            joinScanAt = 0;
+            if (leaveIfListed(mc, now)) return;
+        }
+        if (joinScanAt != 0 || leavingLobby && now - joinedAt < 20_000) {
+            if (joinScanAt != 0) return; // wait for the scan before doing anything else
+        }
 
         List<String> lines = sidebar(mc);
         if (lines == null) { // no sidebar: Limbo (or still loading)
