@@ -15,6 +15,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
+import com.glowingmushroom.pathing.PathMemory;
 import com.glowingmushroom.pathing.Planner;
 import com.glowingmushroom.pathing.WalkCache;
 
@@ -238,6 +239,15 @@ public class MacroController {
     /** Runs /warp glowing, pauses while the teleport happens and forgets the old plan. */
     private void doWarp(Minecraft mc, LocalPlayer p, long now, String why) {
         lastWarp = now;
+        // learn: warping out means this spot (or the route into it) is bad
+        if (p.isInWater()) PathMemory.trouble(p.blockPosition(), 10f);
+        else if (why.startsWith("Stuck") || why.startsWith("Can't reach")) {
+            PathMemory.trouble(p.blockPosition(), 10f);
+            if (leg != null) {
+                PathMemory.trouble(leg.stand(), 6f);
+                for (BlockPos t : leg.targets()) PathMemory.targetFailed(t);
+            }
+        }
         Chat.msg(why + " - /warp glowing");
         releaseKeys(mc);
         p.connection.sendCommand("warp glowing");
@@ -276,6 +286,7 @@ public class MacroController {
         if (target != null) {
             if (!MushroomTracker.isMushroom(mc.level.getBlockState(target).getBlock())) {
                 broken++;
+                PathMemory.targetOk(target);
                 target = null;
             } else if (now - targetSince > MINE_TIMEOUT_MS) {
                 blacklist.put(target, now);
@@ -337,6 +348,7 @@ public class MacroController {
         nukeFirst.keySet().removeIf(bp -> {
             if (MushroomTracker.isMushroom(mc.level.getBlockState(bp).getBlock())) return false;
             broken++;
+            PathMemory.targetOk(bp);
             nukeAttempts.remove(bp);
             return true;
         });
@@ -498,13 +510,20 @@ public class MacroController {
         if (r == Follow.ARRIVED) {
             if (arrivedAt == 0) arrivedAt = now;
             else if (now - arrivedAt > 1500) { // standing here but they won't break
-                for (BlockPos t : leg.targets()) blacklist.put(t, now);
+                for (BlockPos t : leg.targets()) {
+                    blacklist.put(t, now);
+                    PathMemory.targetFailed(t);
+                }
+                PathMemory.trouble(leg.stand(), 4f);
                 leg = null;
                 planDirty = true;
             }
         } else if (r == Follow.STUCK) {
             if (++legStuck >= 2) {
-                for (BlockPos t : leg.targets()) blacklist.put(t, now);
+                for (BlockPos t : leg.targets()) {
+                    blacklist.put(t, now);
+                    PathMemory.targetFailed(t);
+                }
                 leg = null;
             }
             planDirty = true;
@@ -512,6 +531,8 @@ public class MacroController {
     }
 
     private long validateAt;
+    private int jumpNode = -1;     // path index of the step node we jumped for (-1 = none)
+    private int jumpTicks;
     private Cursor spinCursor;
     private int spinIdx;
     private float spinAccum, spinLastYaw;
@@ -538,7 +559,8 @@ public class MacroController {
 
     private void requestPlan(LocalPlayer p, long now) {
         List<BlockPos> ms = new ArrayList<>();
-        for (BlockPos m : MushroomTracker.snapshot()) if (!blacklist.containsKey(m)) ms.add(m);
+        for (BlockPos m : MushroomTracker.snapshot())
+            if (!blacklist.containsKey(m) && !PathMemory.isDead(m)) ms.add(m);
         Set<BlockPos> keep = leg == null ? Set.of() : new HashSet<>(leg.targets());
         if (planner.request(cache.grid(), p.blockPosition(), ms, keep, new HashSet<>(avoid.keySet()))) {
             lastPlanRequest = now;
@@ -669,6 +691,13 @@ public class MacroController {
                 reached = hd0 < arrive || passed;
             }
             if (!reached) break;
+            if (c.moves != null) { // planner path: this node was passed without trouble
+                PathMemory.fine(BlockPos.containing(wp.x, wp.y, wp.z));
+                if (stepUp && !gap && jumpNode == c.idx) {
+                    PathMemory.jumpResult(true);
+                    jumpNode = -1;
+                }
+            }
             c.idx++;
             if (!c.loop && c.idx >= n) return arrive(mc);
             c.idx %= n;
@@ -724,7 +753,13 @@ public class MacroController {
         boolean jump = false;
         if (p.onGround()) {
             if (gap) jump = toWp < 2.3 + speed; // sprint-jump off the lip of a one block gap
-            else if (stepUp && toWp < Math.max(1.3, speed * 3) && wp.y - p.getY() >= 0.55) jump = true;
+            else if (stepUp && toWp < Math.max(1.3, speed * PathMemory.jumpLead) && wp.y - p.getY() >= 0.55) {
+                jump = true;
+                if (c.moves != null && jumpNode != c.idx) { // start watching this jump
+                    jumpNode = c.idx;
+                    jumpTicks = 0;
+                }
+            }
             else if (p.horizontalCollision) {
                 double dx, dz;
                 if (speed > 0.05) {
@@ -740,12 +775,23 @@ public class MacroController {
                 if (ob == 2) { // fence / wall / gate: can't be jumped, re-plan around it right now
                     long nowMs = System.currentTimeMillis();
                     avoid.put(BlockPos.containing(wp.x, wp.y, wp.z), nowMs);
+                    PathMemory.trouble(BlockPos.containing(wp.x, wp.y, wp.z), 8f);
                     planDirty = true;
                     lastPlanRequest = 0;
                 }
             }
         }
         mc.options.keyJump.setDown(jump);
+        // a jump that doesn't get us up in ~1.2 s counts as a failure: take off earlier next time
+        if (jumpNode == c.idx && c.moves != null) {
+            if (++jumpTicks > 25 && p.onGround() && p.getY() < wp.y - 0.6) {
+                PathMemory.jumpResult(false);
+                PathMemory.trouble(BlockPos.containing(wp.x, wp.y, wp.z), 4f);
+                jumpNode = -1;
+            }
+        } else if (jumpNode != -1 && jumpNode != c.idx) {
+            jumpNode = -1;
+        }
 
         // anti-spin: more than 1.5 turns of camera rotation without reaching the node = something is wrong
         // with this node; avoid it and re-plan instead of circling forever
@@ -761,6 +807,7 @@ public class MacroController {
                 long nowMs = System.currentTimeMillis();
                 avoid.put(BlockPos.containing(wp.x, wp.y, wp.z), nowMs);
                 avoid.put(p.blockPosition(), nowMs);
+                PathMemory.trouble(BlockPos.containing(wp.x, wp.y, wp.z), 8f);
                 planDirty = true;
                 lastPlanRequest = 0;
                 legStuck++;
@@ -792,6 +839,11 @@ public class MacroController {
                     avoid.put(here.offset(ax, 0, az), now);
                 }
             avoid.put(there, now);
+            if (c.moves != null) { // learn it (patrol-route stalls are not path-planning mistakes)
+                PathMemory.trouble(there, 6f);
+                PathMemory.trouble(here, 3f);
+                if (stepUp && !gap) PathMemory.jumpResult(false);
+            }
             strafeDir = pickStrafe(p);
             recoverYaw = p.getYRot() + strafeDir * 20f;
             recoverTicks = 6;

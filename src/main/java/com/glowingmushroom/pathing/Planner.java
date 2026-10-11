@@ -217,6 +217,7 @@ public class Planner {
         if (g.slow(x, y, z)) c += SLOW_COST;
         if (g.tallNear(x, y, z)) c += TALL_COST;
         if (g.waterNear(x, y, z)) c += WATER_COST;
+        c += PathMemory.penalty(x, y, z); // learned from past trouble in this exact spot
         if (c > COST_LIMIT) return;
         int i = g.index(x, y, z);
         if (i < 0 || c >= dist[i]) return;
@@ -281,6 +282,7 @@ public class Planner {
                         int i = g.index(x, y, z);
                         if (i < 0 || s.dist[i] == Float.POSITIVE_INFINITY) continue;
                         if (g.waterNear(x, y, z)) continue; // don't end up in the water while mining
+                        if (PathMemory.penalty(x, y, z) >= 12f) continue; // a spot that kept causing trouble
                         float eff = s.dist[i] + (g.edge(x, y, z) ? 2f : 0f); // prefer not on a ledge
                         double ex = x + 0.5, ey = y + EYE, ez = z + 0.5;
                         int cover = 0;

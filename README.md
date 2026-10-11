@@ -88,3 +88,15 @@ stops and tells you. Names are matched against the player name (case-insensitive
 
 Nuker: at most one block is broken per tick (the nearest one in reach that is due), so a cluster is cleared one
 tick apart instead of all at once; this avoids ghost blocks. Retries for a block that is still there come every 250 ms.
+
+## Auto updater
+`/glowing autoupdate on|off` (default on) checks this repo's `latest-build` release about once an hour; `/glowing update`
+checks now. A newer jar is downloaded into `mods/` only if its SHA-256 matches what GitHub publishes, it is a Fabric
+mod with id `glowingmushroomauto` and the version inside matches. You get a chat message; restart the game to use it.
+Older copies are deleted automatically on the next start. It never replaces the running jar.
+
+## Path learning
+The pathfinder remembers trouble in `config/glowingmushroom_pathmemory.json`: cells where it got stuck, spun, hit a wall
+it can't jump, ended up in water or had to `/warp` out get an extra cost (fading when it passes without problems and
+over time); mushroom spots it keeps failing to reach are skipped until they work again; and how early it starts a jump
+adapts (shorter when jumps work, earlier when they fail). `/glowing learn` shows stats, `on|off` toggles, `reset` erases.

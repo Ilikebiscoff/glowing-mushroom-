@@ -31,6 +31,10 @@ public class GlowingMushroomMod implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         route = new Route(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_route.json"));
+        com.glowingmushroom.pathing.PathMemory.init(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_pathmemory.json"));
+        Settings.load(FabricLoader.getInstance().getConfigDir().resolve("glowingmushroom_settings.json"));
+        Updater.cleanupOldJars();
+        Runtime.getRuntime().addShutdownHook(new Thread(com.glowingmushroom.pathing.PathMemory::save));
         controller = new MacroController(route, cache);
         failsafe = new Failsafe(controller);
 
@@ -46,6 +50,8 @@ public class GlowingMushroomMod implements ClientModInitializer {
             cache.tick(mc);
             controller.tick(mc);
             failsafe.tick(mc);
+            com.glowingmushroom.pathing.PathMemory.tick();
+            if (mc.player != null) Updater.tick();
             ProfitTracker.tick(mc, controller.isRunning());
         });
 
@@ -232,6 +238,50 @@ public class GlowingMushroomMod implements ClientModInitializer {
                         Chat.msg(who == null ? "Nobody from the list is in this lobby." : who + " is in this lobby.");
                         return 1;
                     })));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("learn")
+                    .executes(c -> {
+                        Chat.msg(com.glowingmushroom.pathing.PathMemory.stats());
+                        return 1;
+                    })
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("on").executes(c -> {
+                        com.glowingmushroom.pathing.PathMemory.enabled = true;
+                        Settings.save();
+                        Chat.msg("Path learning ON.");
+                        return 1;
+                    }))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("off").executes(c -> {
+                        com.glowingmushroom.pathing.PathMemory.enabled = false;
+                        Settings.save();
+                        Chat.msg("Path learning OFF (what it learned is kept but not used).");
+                        return 1;
+                    }))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("reset").executes(c -> {
+                        com.glowingmushroom.pathing.PathMemory.reset();
+                        Chat.msg("Everything the pathfinder learned was erased.");
+                        return 1;
+                    })));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("update").executes(c -> {
+                if (Updater.pendingRestart != null) Chat.msg("Update " + Updater.pendingRestart + " is already downloaded - restart the game.");
+                else Updater.check(true);
+                return 1;
+            }));
+            root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("autoupdate")
+                    .executes(c -> {
+                        Chat.msg("Auto update: " + (Updater.auto ? "ON" : "OFF") + " (you have " + Updater.currentVersion() + ")");
+                        return 1;
+                    })
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("on").executes(c -> {
+                        Updater.auto = true;
+                        Settings.save();
+                        Chat.msg("Auto update ON (checks about once an hour, downloads and verifies, you restart).");
+                        return 1;
+                    }))
+                    .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("off").executes(c -> {
+                        Updater.auto = false;
+                        Settings.save();
+                        Chat.msg("Auto update OFF. /glowing update still checks on demand.");
+                        return 1;
+                    })));
             root.then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("nomush")
                     .executes(c -> {
                         long ms = controller.noMushroomWarpMs;
@@ -282,6 +332,9 @@ public class GlowingMushroomMod implements ClientModInitializer {
         Chat.msg(" /glowing path - stats of the last path plan (nodes, ms, jumps)");
         Chat.msg(" /glowing parkour on|off - allow sprint-jumping over 1-block gaps (default off)");
         Chat.msg(" /glowing avoid add|remove <name>, list, clear, check - players to avoid sharing a lobby with");
+        Chat.msg(" /glowing update - check now and download a newer version (restart to apply)");
+        Chat.msg(" /glowing autoupdate on|off - hourly automatic check/download (default on)");
+        Chat.msg(" /glowing learn [on|off|reset] - path learning stats / toggle / erase");
         Chat.msg(" /glowing hud - toggle the profit panel (top left)");
         Chat.msg(" /glowing failsafe - toggle auto reconnect / rejoin SkyBlock / warp back");
         Chat.msg(" /glowing zone [text] - sidebar text that means you're in the cave");
